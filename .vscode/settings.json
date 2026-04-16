@@ -1,0 +1,10 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-18.1.2_20240912\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\ChenShuang\\Desktop\\esp32\\demo6\\build"
+  ],
+  "idf.currentSetup": "c:\\Users\\ChenShuang\\esp\\v5.2\\esp-idf"
+}
