@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "app_ui.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        drivers
+        lvgl
+)
