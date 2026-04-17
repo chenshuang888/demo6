@@ -3,6 +3,7 @@
 #include <sys/time.h>
 #include "esp_log.h"
 #include "app_main.h"
+#include "ble_driver.h"
 
 static const char *TAG = "main";
 
@@ -27,6 +28,9 @@ void app_main(void)
 
     // 先初始化系统时间
     init_default_time();
+
+    // 初始化 BLE
+    ESP_ERROR_CHECK(ble_driver_init());
 
     // 再初始化应用
     ESP_ERROR_CHECK(app_main_init());

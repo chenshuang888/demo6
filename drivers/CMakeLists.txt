@@ -3,6 +3,7 @@ idf_component_register(
         "lcd_panel.c"
         "touch_ft5x06.c"
         "lvgl_port.c"
+        "ble_driver.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -11,4 +12,7 @@ idf_component_register(
         esp_timer
         driver
         esp_lcd
+        nvs_flash
+    PRIV_REQUIRES
+        bt
 )
