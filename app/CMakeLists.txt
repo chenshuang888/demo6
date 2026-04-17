@@ -1,9 +1,12 @@
 idf_component_register(
     SRCS
-        "app_ui.c"
+        "app_main.c"
+        "pages/page_time.c"
+        "pages/page_menu.c"
     INCLUDE_DIRS
         "."
     REQUIRES
+        framework
         drivers
         lvgl
 )
