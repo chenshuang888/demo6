@@ -3,6 +3,7 @@ idf_component_register(
         "app_main.c"
         "pages/page_time.c"
         "pages/page_menu.c"
+        "pages/page_about.c"
     INCLUDE_DIRS
         "."
     REQUIRES

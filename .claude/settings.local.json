@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(find *)",
-      "Bash(grep -v \"^//\")"
+      "Bash(grep -v \"^//\")",
+      "Bash(python -m py_compile tools/ble_time_sync.py)"
     ]
   }
 }

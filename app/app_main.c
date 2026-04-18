@@ -1,6 +1,7 @@
 #include "app_main.h"
 #include "pages/page_time.h"
 #include "pages/page_menu.h"
+#include "pages/page_about.h"
 #include "page_router.h"
 #include "lvgl_port.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +29,7 @@ esp_err_t app_main_init(void)
 
     ESP_ERROR_CHECK(page_router_register(PAGE_TIME, page_time_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_MENU, page_menu_get_callbacks()));
+    ESP_ERROR_CHECK(page_router_register(PAGE_ABOUT, page_about_get_callbacks()));
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
 
