@@ -4,6 +4,8 @@ idf_component_register(
         "time_manager.c"
         "weather_manager.c"
         "weather_service.c"
+        "notify_manager.c"
+        "notify_service.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES

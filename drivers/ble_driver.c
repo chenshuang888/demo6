@@ -10,6 +10,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "time_service.h"
 #include "weather_service.h"
+#include "notify_service.h"
 
 /* 外部库函数声明 */
 void ble_store_config_init(void);
@@ -175,6 +176,13 @@ esp_err_t ble_driver_init(void)
     ret = weather_service_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize weather service, error: %d", ret);
+        return ESP_FAIL;
+    }
+
+    /* 初始化通知服务 */
+    ret = notify_service_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize notify service, error: %d", ret);
         return ESP_FAIL;
     }
 

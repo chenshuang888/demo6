@@ -3,7 +3,13 @@
     "allow": [
       "Bash(find *)",
       "Bash(grep -v \"^//\")",
-      "Bash(python -m py_compile tools/ble_time_sync.py)"
+      "Bash(python -m py_compile tools/ble_time_sync.py)",
+      "Read(//c/Users/ChenShuang/esp/v5.2/**)",
+      "Read(//c/Users/ChenShuang/esp/**)",
+      "Read(//c/esp_v5.4.3/v5.4.3/**)",
+      "Read(//c/esp_v5.4.3/**)",
+      "Read(//c/Users/ChenShuang/.espressif/**)",
+      "Read(//c/Users/ChenShuang/.espressif/python_env/**)"
     ]
   }
 }

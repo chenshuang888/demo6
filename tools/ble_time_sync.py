@@ -17,6 +17,7 @@
 
 import asyncio
 import struct
+import sys
 import threading
 import time as _time
 import tkinter as tk
@@ -27,6 +28,34 @@ from tkinter import ttk
 import requests
 from bleak import BleakClient, BleakScanner
 
+
+def _enable_windows_dpi_awareness() -> None:
+    """告诉 Windows 这个进程自己处理 DPI 缩放，避免系统再把窗口拉伸一遍。
+
+    不启用的话，150% 缩放下画 700px 会被系统放大到 1050px 超出屏幕。
+    启用后 Tk 按真实像素绘制，窗口尺寸和内容都正常。
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+    try:
+        # Per-monitor v2（Windows 10 1703+），最理想
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    try:
+        # System DPI aware（Windows 8.1+）
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        return
+    except Exception:
+        pass
+    try:
+        # 兜底：Windows 7
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
@@ -34,16 +63,31 @@ from bleak import BleakClient, BleakScanner
 DEVICE_NAME = "ESP32-S3-DEMO"
 CTS_CHAR_UUID = "00002a2b-0000-1000-8000-00805f9b34fb"
 WEATHER_CHAR_UUID = "8a5c0002-0000-4aef-b87e-4fa1e0c7e0f6"
+NOTIFY_CHAR_UUID  = "8a5c0004-0000-4aef-b87e-4fa1e0c7e0f6"
 
 SCAN_TIMEOUT = 10.0
 CTS_STRUCT = "<HBBBBBBBB"                    # 10 字节, ble_cts_current_time_t
 WEATHER_STRUCT = "<hhhBBI24s32s"             # 68 字节, weather_payload_t
+NOTIFY_STRUCT  = "<IBB2x32s96s"              # 136 字节, notification_payload_t
 
 AUTO_PUSH_INTERVAL_SEC = 600                 # 10 分钟
 
 # 天气编码（与 services/weather_manager.h 对齐）
 WC_UNKNOWN, WC_CLEAR, WC_CLOUDY, WC_OVERCAST = 0, 1, 2, 3
 WC_RAIN, WC_SNOW, WC_FOG, WC_THUNDER = 4, 5, 6, 7
+
+# 通知类别（与 services/notify_manager.h 对齐）
+NOTIFY_CATEGORIES = [
+    ("Generic",  0),
+    ("Message",  1),
+    ("Email",    2),
+    ("Call",     3),
+    ("Calendar", 4),
+    ("Social",   5),
+    ("News",     6),
+    ("Alert",    7),
+]
+NOTIFY_PRIORITIES = [("Low", 0), ("Normal", 1), ("High", 2)]
 
 
 def wmo_to_code(wmo: int) -> int:
@@ -145,6 +189,22 @@ def fetch_weather(lat: float, lon: float, city: str) -> Weather:
 
 
 # ---------------------------------------------------------------------------
+# UTF-8 安全截断（不破坏多字节字符）
+# ---------------------------------------------------------------------------
+
+def _utf8_fixed(s: str, size: int) -> bytes:
+    """把字符串按 UTF-8 编码并截断到 size 字节，保留合法 UTF-8 边界，
+    末尾用 \\0 填充到 size。"""
+    b = s.encode("utf-8")
+    if len(b) > size - 1:
+        b = b[:size - 1]
+        # 回退到上一个合法 UTF-8 边界（避免截到多字节字符中间）
+        while b and (b[-1] & 0xC0) == 0x80:
+            b = b[:-1]
+    return b.ljust(size, b"\0")
+
+
+# ---------------------------------------------------------------------------
 # BLE 客户端
 # ---------------------------------------------------------------------------
 
@@ -200,6 +260,19 @@ class BleClient:
             raise RuntimeError("未连接")
         await self._client.write_gatt_char(WEATHER_CHAR_UUID, w.pack(), response=True)
 
+    async def write_notification(self, category: int, priority: int,
+                                 title: str, body: str) -> None:
+        if not self.connected:
+            raise RuntimeError("未连接")
+        data = struct.pack(
+            NOTIFY_STRUCT,
+            int(_time.time()),
+            category, priority,
+            _utf8_fixed(title, 32),
+            _utf8_fixed(body, 96),
+        )
+        await self._client.write_gatt_char(NOTIFY_CHAR_UUID, data, response=True)
+
 
 # ---------------------------------------------------------------------------
 # GUI
@@ -227,8 +300,9 @@ class App:
     def _build_ui(self) -> None:
         self.root = tk.Tk()
         self.root.title("ESP32 BLE Companion")
-        self.root.geometry("400x480")
-        self.root.resizable(False, False)
+        self.root.geometry("400x720")
+        self.root.minsize(400, 600)
+        self.root.resizable(False, True)
 
         FONT_UI = ("Microsoft YaHei UI", 10)
         FONT_SECTION = ("Microsoft YaHei UI", 10, "bold")
@@ -292,6 +366,54 @@ class App:
         tk.Label(self.root, textvariable=self.auto_status_var,
                  fg="gray", font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=12, pady=(0, 10))
 
+        # ===== 通知推送区 =====
+        ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=12, pady=(4, 4))
+        ttk.Label(self.root, text="通知推送", font=FONT_SECTION).pack(anchor="w", padx=12)
+
+        # 外层 frame：按钮用 side="bottom" 固定在底部，永远可见
+        notify_frame = tk.Frame(self.root)
+        notify_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # --- 先放底部：按钮、提示（pack side=bottom 后 pack 的离中间更近） ---
+        self.push_notify_btn = ttk.Button(notify_frame, text="推送通知",
+                                          command=self._on_push_notify, state="disabled")
+        self.push_notify_btn.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
+
+        tk.Label(notify_frame,
+                 text="提示: 当前固件字体仅含 ASCII / 拉丁字符，中文会显示为方块。",
+                 fg="gray", font=("Microsoft YaHei UI", 9),
+                 wraplength=370, justify="left").pack(side="bottom", anchor="w",
+                                                       padx=12, pady=(0, 4))
+
+        # --- 再放顶部：类别行、标题、内容 ---
+        notify_top = tk.Frame(notify_frame)
+        notify_top.pack(side="top", fill="x", padx=12, pady=(4, 2))
+
+        tk.Label(notify_top, text="类别", font=FONT_UI).pack(side="left")
+        self.notify_cat_var = tk.StringVar(value=NOTIFY_CATEGORIES[1][0])
+        self.notify_cat_cb = ttk.Combobox(
+            notify_top, textvariable=self.notify_cat_var, width=10,
+            values=[name for name, _ in NOTIFY_CATEGORIES], state="readonly")
+        self.notify_cat_cb.pack(side="left", padx=(4, 12))
+
+        tk.Label(notify_top, text="优先级", font=FONT_UI).pack(side="left")
+        self.notify_pri_var = tk.StringVar(value=NOTIFY_PRIORITIES[1][0])
+        self.notify_pri_cb = ttk.Combobox(
+            notify_top, textvariable=self.notify_pri_var, width=8,
+            values=[name for name, _ in NOTIFY_PRIORITIES], state="readonly")
+        self.notify_pri_cb.pack(side="left", padx=(4, 0))
+
+        tk.Label(notify_frame, text="标题", font=FONT_UI).pack(side="top", anchor="w",
+                                                                 padx=12, pady=(2, 0))
+        self.notify_title_var = tk.StringVar()
+        ttk.Entry(notify_frame, textvariable=self.notify_title_var).pack(
+            side="top", fill="x", padx=12, pady=(2, 2))
+
+        tk.Label(notify_frame, text="内容", font=FONT_UI).pack(side="top", anchor="w",
+                                                                 padx=12)
+        self.notify_body_text = tk.Text(notify_frame, height=3, font=FONT_UI, wrap="word")
+        self.notify_body_text.pack(side="top", fill="x", padx=12, pady=(2, 4))
+
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ----- 状态 / 按钮 -----
@@ -308,6 +430,7 @@ class App:
         self.refresh_weather_btn.config(state="disabled" if busy else "normal")
         can_push = can_ble and self._latest_weather is not None
         self.push_weather_btn.config(state="normal" if can_push else "disabled")
+        self.push_notify_btn.config(state="normal" if can_ble else "disabled")
 
     # ----- 异步桥接 -----
 
@@ -435,6 +558,30 @@ class App:
 
         self._submit(self._ble.write_weather(self._latest_weather), done)
 
+    # ----- 通知推送 -----
+
+    def _on_push_notify(self) -> None:
+        title = self.notify_title_var.get().strip()
+        body = self.notify_body_text.get("1.0", "end-1c")
+        if not title and not body:
+            self._set_status("● 标题或内容至少填一个", "red")
+            return
+
+        cat = dict(NOTIFY_CATEGORIES)[self.notify_cat_var.get()]
+        pri = dict(NOTIFY_PRIORITIES)[self.notify_pri_var.get()]
+
+        self._set_status("● 推送通知...", "orange")
+
+        def done(exc, _r):
+            if exc is None:
+                self._set_status("● 通知已推送", "green")
+                self.notify_title_var.set("")
+                self.notify_body_text.delete("1.0", "end")
+            else:
+                self._set_status(f"● 推送失败: {exc}", "red")
+
+        self._submit(self._ble.write_notification(cat, pri, title, body), done)
+
     # ----- 自动推送 -----
 
     def _on_auto_toggle(self) -> None:
@@ -499,4 +646,5 @@ class App:
 
 
 if __name__ == "__main__":
+    _enable_windows_dpi_awareness()
     App().run()

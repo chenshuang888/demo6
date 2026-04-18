@@ -3,10 +3,12 @@
 #include "pages/page_menu.h"
 #include "pages/page_about.h"
 #include "pages/page_weather.h"
+#include "pages/page_notifications.h"
 #include "page_router.h"
 #include "lvgl_port.h"
 #include "time_manager.h"
 #include "weather_manager.h"
+#include "notify_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -18,6 +20,7 @@ static void ui_task(void *arg)
     while (1) {
         time_manager_process_pending();
         weather_manager_process_pending();
+        notify_manager_process_pending();
         page_router_update();
         lvgl_port_task_handler();
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -36,6 +39,7 @@ esp_err_t app_main_init(void)
     ESP_ERROR_CHECK(page_router_register(PAGE_MENU, page_menu_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_ABOUT, page_about_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_WEATHER, page_weather_get_callbacks()));
+    ESP_ERROR_CHECK(page_router_register(PAGE_NOTIFICATIONS, page_notifications_get_callbacks()));
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
 

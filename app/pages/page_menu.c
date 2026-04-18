@@ -29,8 +29,8 @@ typedef struct {
     lv_obj_t *bt_item;
     lv_obj_t *bl_item;
     lv_obj_t *weather_item;
+    lv_obj_t *notify_item;
     lv_obj_t *about_item;
-    lv_obj_t *exit_item;
 
     lv_obj_t *bt_status_lbl;   /* 蓝牙状态文字: "已连接"/"未连接" */
     lv_obj_t *bl_value_lbl;    /* 背光亮度文字: "50%" */
@@ -196,12 +196,12 @@ static void create_menu_list(void)
         LV_SYMBOL_IMAGE, "Weather",
         NULL, NULL, 0, false);
 
-    s_ui.about_item = create_list_item(card,
-        LV_SYMBOL_LIST, "About",
+    s_ui.notify_item = create_list_item(card,
+        LV_SYMBOL_BELL, "Notifications",
         NULL, NULL, 0, false);
 
-    s_ui.exit_item = create_list_item(card,
-        LV_SYMBOL_HOME, "Back to Clock",
+    s_ui.about_item = create_list_item(card,
+        LV_SYMBOL_LIST, "About",
         NULL, NULL, 0, true);
 }
 
@@ -262,13 +262,18 @@ static void on_weather_clicked(lv_event_t *e)
     page_router_switch(PAGE_WEATHER);
 }
 
+static void on_notify_clicked(lv_event_t *e)
+{
+    page_router_switch(PAGE_NOTIFICATIONS);
+}
+
 static void bind_events(void)
 {
-    lv_obj_add_event_cb(s_ui.back_btn,    on_back_clicked,      LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_ui.bl_item,     on_backlight_clicked, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_ui.weather_item, on_weather_clicked,  LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_ui.about_item,  on_about_clicked,     LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_ui.exit_item,   on_back_clicked,      LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.back_btn,     on_back_clicked,      LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.bl_item,      on_backlight_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.weather_item, on_weather_clicked,   LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.notify_item,  on_notify_clicked,    LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.about_item,   on_about_clicked,     LV_EVENT_CLICKED, NULL);
 }
 
 /* ============================================================================
@@ -313,7 +318,7 @@ static void page_menu_destroy(void)
     lv_style_reset(&s_ui.style_topbtn_pressed);
 
     s_ui.back_btn = NULL;
-    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.about_item = s_ui.exit_item = NULL;
+    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.notify_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

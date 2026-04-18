@@ -6,6 +6,7 @@
 #include "ble_driver.h"
 #include "time_manager.h"
 #include "weather_manager.h"
+#include "notify_manager.h"
 
 static const char *TAG = "main";
 
@@ -36,6 +37,9 @@ void app_main(void)
 
     // 初始化天气管理器（同上）
     ESP_ERROR_CHECK(weather_manager_init());
+
+    // 初始化通知管理器（同上）
+    ESP_ERROR_CHECK(notify_manager_init());
 
     // 初始化 BLE
     ESP_ERROR_CHECK(ble_driver_init());
