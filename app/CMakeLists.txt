@@ -4,6 +4,7 @@ idf_component_register(
         "pages/page_time.c"
         "pages/page_menu.c"
         "pages/page_about.c"
+        "pages/page_weather.c"
     INCLUDE_DIRS
         "."
     REQUIRES

@@ -33,6 +33,7 @@ typedef enum {
     PAGE_TIME,      // 时间调节页面
     PAGE_MENU,      // 菜单页面
     PAGE_ABOUT,     // 关于页面
+    PAGE_WEATHER,   // 天气页面
     PAGE_MAX        // 页面总数（自动计算）
 } page_id_t;
 

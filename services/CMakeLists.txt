@@ -2,6 +2,8 @@ idf_component_register(
     SRCS
         "time_service.c"
         "time_manager.c"
+        "weather_manager.c"
+        "weather_service.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES

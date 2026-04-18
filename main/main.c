@@ -5,6 +5,7 @@
 #include "app_main.h"
 #include "ble_driver.h"
 #include "time_manager.h"
+#include "weather_manager.h"
 
 static const char *TAG = "main";
 
@@ -32,6 +33,9 @@ void app_main(void)
 
     // 初始化时间管理器（BLE 需要在初始化前就绪）
     ESP_ERROR_CHECK(time_manager_init());
+
+    // 初始化天气管理器（同上）
+    ESP_ERROR_CHECK(weather_manager_init());
 
     // 初始化 BLE
     ESP_ERROR_CHECK(ble_driver_init());
