@@ -1,12 +1,12 @@
-"""ESP32 BLE Companion (Tkinter GUI).
+"""ESP32 BLE Companion (CustomTkinter GUI).
 
-统一的 PC 端配套工具，整合两块功能：
+PC 端配套工具，功能：
   1. 时间同步 — Current Time Service (UUID 0x2A2B)
-  2. 天气推送 — 自定义天气服务 (UUID 8a5c0002-...)
+  2. 天气推送 — 自定义服务 (UUID 8a5c0002-...)
+  3. 通知推送 — 自定义服务 (UUID 8a5c0004-...)
 
-天气数据来源：
-  - IP 定位: ip-api.com (免费无需 Key)
-  - 天气数据: open-meteo.com (免费无需 Key)
+风格：深紫 + 青绿，与 ESP32 端 LVGL 屏幕配色一致。
+布局：左侧边栏导航 + 右侧内容区。
 
 依赖安装:
     pip install -r requirements.txt
@@ -20,41 +20,30 @@ import struct
 import sys
 import threading
 import time as _time
-import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
-from tkinter import ttk
 
+import customtkinter as ctk
 import requests
 from bleak import BleakClient, BleakScanner
 
 
 def _enable_windows_dpi_awareness() -> None:
-    """告诉 Windows 这个进程自己处理 DPI 缩放，避免系统再把窗口拉伸一遍。
-
-    不启用的话，150% 缩放下画 700px 会被系统放大到 1050px 超出屏幕。
-    启用后 Tk 按真实像素绘制，窗口尺寸和内容都正常。
-    """
+    """声明进程自己处理 DPI，避免 Windows 二次放大窗口。"""
     if sys.platform != "win32":
         return
     import ctypes
-    try:
-        # Per-monitor v2（Windows 10 1703+），最理想
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        return
-    except Exception:
-        pass
-    try:
-        # System DPI aware（Windows 8.1+）
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        return
-    except Exception:
-        pass
-    try:
-        # 兜底：Windows 7
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+    for fn in (
+        lambda: ctypes.windll.shcore.SetProcessDpiAwareness(2),
+        lambda: ctypes.windll.shcore.SetProcessDpiAwareness(1),
+        lambda: ctypes.windll.user32.SetProcessDPIAware(),
+    ):
+        try:
+            fn()
+            return
+        except Exception:
+            continue
+
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -90,6 +79,29 @@ NOTIFY_CATEGORIES = [
 NOTIFY_PRIORITIES = [("Low", 0), ("Normal", 1), ("High", 2)]
 
 
+# ---------------------------------------------------------------------------
+# 配色（与 ESP32 LVGL 页面完全一致）
+# ---------------------------------------------------------------------------
+
+COLOR_BG        = "#1E1B2E"
+COLOR_SIDEBAR   = "#2D2640"
+COLOR_CARD      = "#2D2640"
+COLOR_CARD_ALT  = "#3A3354"
+COLOR_ACCENT    = "#06B6D4"
+COLOR_ACCENT_H  = "#0891B2"
+COLOR_TEXT      = "#F1ECFF"
+COLOR_MUTED     = "#9B94B5"
+COLOR_SUCCESS   = "#10B981"
+COLOR_DANGER    = "#EF4444"
+COLOR_WARN      = "#F97316"
+
+FONT_FAMILY = "Microsoft YaHei UI"
+
+
+# ---------------------------------------------------------------------------
+# 天气数据 + 打包
+# ---------------------------------------------------------------------------
+
 def wmo_to_code(wmo: int) -> int:
     if wmo == 0:
         return WC_CLEAR
@@ -123,10 +135,17 @@ WMO_DESC = {
     95: "Thunderstorm", 96: "Thunder w/ Hail", 99: "Thunder w/ Hail",
 }
 
+# 天气编码 → 颜色（与 page_weather.c 对齐）
+CODE_COLOR = {
+    WC_CLEAR:    "#FBBF24",
+    WC_CLOUDY:   "#94A3B8",
+    WC_OVERCAST: "#6B7280",
+    WC_RAIN:     "#3B82F6",
+    WC_SNOW:     "#BAE6FD",
+    WC_FOG:      "#A78BFA",
+    WC_THUNDER:  COLOR_WARN,
+}
 
-# ---------------------------------------------------------------------------
-# 天气数据 + 打包
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Weather:
@@ -188,17 +207,11 @@ def fetch_weather(lat: float, lon: float, city: str) -> Weather:
     )
 
 
-# ---------------------------------------------------------------------------
-# UTF-8 安全截断（不破坏多字节字符）
-# ---------------------------------------------------------------------------
-
 def _utf8_fixed(s: str, size: int) -> bytes:
-    """把字符串按 UTF-8 编码并截断到 size 字节，保留合法 UTF-8 边界，
-    末尾用 \\0 填充到 size。"""
+    """按 UTF-8 编码并在合法边界截断到 size 字节，末尾 \\0 填充。"""
     b = s.encode("utf-8")
     if len(b) > size - 1:
         b = b[:size - 1]
-        # 回退到上一个合法 UTF-8 边界（避免截到多字节字符中间）
         while b and (b[-1] & 0xC0) == 0x80:
             b = b[:-1]
     return b.ljust(size, b"\0")
@@ -215,6 +228,10 @@ class BleClient:
     @property
     def connected(self) -> bool:
         return self._client is not None and self._client.is_connected
+
+    @property
+    def address(self) -> str | None:
+        return self._client.address if self._client else None
 
     async def connect(self) -> None:
         device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT)
@@ -244,7 +261,6 @@ class BleClient:
     async def write_time(self, dt: datetime) -> None:
         if not self.connected:
             raise RuntimeError("未连接")
-        # Python weekday(): 0=周一..6=周日 -> 固件: 1=周一..7=周日
         dow = dt.weekday() + 1
         fractions256 = (dt.microsecond * 256) // 1_000_000
         data = struct.pack(
@@ -275,11 +291,35 @@ class BleClient:
 
 
 # ---------------------------------------------------------------------------
-# GUI
+# GUI 辅助
 # ---------------------------------------------------------------------------
 
-class App:
+def f(size: int, weight: str = "normal") -> ctk.CTkFont:
+    return ctk.CTkFont(family=FONT_FAMILY, size=size, weight=weight)
+
+
+def fmono(size: int, weight: str = "normal") -> ctk.CTkFont:
+    return ctk.CTkFont(family="Consolas", size=size, weight=weight)
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+NAV_ITEMS = [
+    ("home",    "🏠  Home"),
+    ("time",    "⏱  Time"),
+    ("weather", "🌤  Weather"),
+    ("notify",  "🔔  Notify"),
+]
+
+
+class App(ctk.CTk):
     def __init__(self):
+        super().__init__()
+        ctk.set_appearance_mode("dark")
+
+        # 业务状态
         self._ble = BleClient()
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -288,155 +328,437 @@ class App:
         self._location: tuple[float, float, str] | None = None
         self._latest_weather: Weather | None = None
         self._auto_timer: str | None = None
+        self._last_read_time: datetime | None = None
 
-        self._build_ui()
+        self._current_page: str = "home"
+        self._busy: bool = False
+
+        self._setup_window()
+        self._build_layout()
+        self._show_page("home")
+        self._refresh_state()
+
+    # ----- 窗口基础 -----
+
+    def _setup_window(self) -> None:
+        self.title("ESP32 BLE Companion")
+        self.geometry("720x480")
+        self.resizable(False, False)
+        self.configure(fg_color=COLOR_BG)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _build_layout(self) -> None:
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        self._build_sidebar()
+        self._build_content()
+
+    # ----- 侧边栏 -----
+
+    def _build_sidebar(self) -> None:
+        side = ctk.CTkFrame(self, width=180, corner_radius=0, fg_color=COLOR_SIDEBAR)
+        side.grid(row=0, column=0, sticky="nsw")
+        side.grid_propagate(False)
+        side.grid_columnconfigure(0, weight=1)
+        side.grid_rowconfigure(2, weight=1)  # 中间 nav 列表占据剩余空间
+
+        # 顶部 Logo 区
+        logo_box = ctk.CTkFrame(side, fg_color="transparent")
+        logo_box.grid(row=0, column=0, sticky="ew", padx=16, pady=(20, 16))
+
+        ctk.CTkLabel(logo_box, text="ESP32", font=f(20, "bold"),
+                     text_color=COLOR_ACCENT).pack(anchor="w")
+        ctk.CTkLabel(logo_box, text="BLE Companion", font=f(11),
+                     text_color=COLOR_MUTED).pack(anchor="w")
+
+        # 分割线
+        ctk.CTkFrame(side, height=1, fg_color=COLOR_CARD_ALT).grid(
+            row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+
+        # 导航
+        nav = ctk.CTkFrame(side, fg_color="transparent")
+        nav.grid(row=2, column=0, sticky="new", padx=10)
+        nav.grid_columnconfigure(0, weight=1)
+
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
+        for i, (key, label) in enumerate(NAV_ITEMS):
+            btn = ctk.CTkButton(
+                nav, text=label, anchor="w",
+                font=f(13), height=40, corner_radius=8,
+                fg_color="transparent",
+                hover_color=COLOR_CARD_ALT,
+                text_color=COLOR_TEXT,
+                command=lambda k=key: self._show_page(k),
+            )
+            btn.grid(row=i, column=0, sticky="ew", pady=3)
+            self._nav_buttons[key] = btn
+
+        # 底部连接状态
+        status_box = ctk.CTkFrame(side, fg_color="transparent")
+        status_box.grid(row=3, column=0, sticky="sew", padx=16, pady=(12, 16))
+
+        ctk.CTkFrame(status_box, height=1, fg_color=COLOR_CARD_ALT).pack(
+            fill="x", pady=(0, 10))
+
+        row = ctk.CTkFrame(status_box, fg_color="transparent")
+        row.pack(fill="x")
+        self._status_dot = ctk.CTkLabel(row, text="●", font=f(14),
+                                         text_color=COLOR_MUTED)
+        self._status_dot.pack(side="left")
+        self._status_text = ctk.CTkLabel(row, text="未连接", font=f(12),
+                                          text_color=COLOR_TEXT)
+        self._status_text.pack(side="left", padx=(6, 0))
+
+        self._status_addr = ctk.CTkLabel(status_box, text="", font=fmono(9),
+                                          text_color=COLOR_MUTED)
+        self._status_addr.pack(anchor="w", pady=(4, 0))
+
+    def _update_nav_selection(self, active_key: str) -> None:
+        for key, btn in self._nav_buttons.items():
+            if key == active_key:
+                btn.configure(fg_color=COLOR_ACCENT, text_color=COLOR_TEXT,
+                              hover_color=COLOR_ACCENT_H)
+            else:
+                btn.configure(fg_color="transparent", text_color=COLOR_TEXT,
+                              hover_color=COLOR_CARD_ALT)
+
+    # ----- 内容区 -----
+
+    def _build_content(self) -> None:
+        container = ctk.CTkFrame(self, fg_color=COLOR_BG, corner_radius=0)
+        container.grid(row=0, column=1, sticky="nsew")
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+        self._content_container = container
+
+        self._pages: dict[str, ctk.CTkFrame] = {}
+        self._pages["home"]    = self._build_home()
+        self._pages["time"]    = self._build_time()
+        self._pages["weather"] = self._build_weather()
+        self._pages["notify"]  = self._build_notify()
+        for frame in self._pages.values():
+            frame.grid(row=0, column=0, sticky="nsew", padx=24, pady=20)
+            frame.grid_remove()
+
+    def _show_page(self, key: str) -> None:
+        if key not in self._pages:
+            return
+        if self._current_page and self._current_page in self._pages:
+            self._pages[self._current_page].grid_remove()
+        self._pages[key].grid()
+        self._current_page = key
+        self._update_nav_selection(key)
+
+    # ----- Home 页 -----
+
+    def _build_home(self) -> ctk.CTkFrame:
+        page = ctk.CTkFrame(self._content_container, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(page, text="设备连接", font=f(22, "bold"),
+                     text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w")
+
+        # 状态卡片
+        card = ctk.CTkFrame(page, fg_color=COLOR_CARD, corner_radius=12)
+        card.grid(row=1, column=0, sticky="ew", pady=(16, 16))
+
+        ctk.CTkLabel(card, text=DEVICE_NAME, font=f(16, "bold"),
+                     text_color=COLOR_ACCENT).pack(anchor="w", padx=20, pady=(18, 4))
+
+        self._home_status_lbl = ctk.CTkLabel(card, text="未连接", font=f(13),
+                                              text_color=COLOR_MUTED)
+        self._home_status_lbl.pack(anchor="w", padx=20, pady=(0, 4))
+
+        self._home_addr_lbl = ctk.CTkLabel(card, text="", font=fmono(10),
+                                            text_color=COLOR_MUTED)
+        self._home_addr_lbl.pack(anchor="w", padx=20, pady=(0, 18))
+
+        # 主按钮
+        self._connect_btn = ctk.CTkButton(
+            page, text="连接设备", font=f(14, "bold"), height=44,
+            corner_radius=10, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_H,
+            text_color=COLOR_TEXT, command=self._on_connect_click,
+        )
+        self._connect_btn.grid(row=2, column=0, sticky="ew")
+
+        ctk.CTkLabel(page,
+            text="连接后可使用左侧菜单的时间同步、天气推送、通知推送功能",
+            font=f(10), text_color=COLOR_MUTED).grid(row=3, column=0, sticky="w", pady=(14, 0))
+
+        return page
+
+    # ----- Time 页 -----
+
+    def _build_time(self) -> ctk.CTkFrame:
+        page = ctk.CTkFrame(self._content_container, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(page, text="时间同步", font=f(22, "bold"),
+                     text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w")
+
+        card = ctk.CTkFrame(page, fg_color=COLOR_CARD, corner_radius=12)
+        card.grid(row=1, column=0, sticky="ew", pady=(16, 16))
+
+        ctk.CTkLabel(card, text="ESP32 时间", font=f(11),
+                     text_color=COLOR_MUTED).pack(anchor="w", padx=20, pady=(18, 2))
+
+        self._time_lbl = ctk.CTkLabel(card, text="--:--:--", font=fmono(28, "bold"),
+                                       text_color=COLOR_ACCENT)
+        self._time_lbl.pack(anchor="w", padx=20, pady=(0, 4))
+
+        self._time_date_lbl = ctk.CTkLabel(card, text="--", font=f(12),
+                                            text_color=COLOR_MUTED)
+        self._time_date_lbl.pack(anchor="w", padx=20, pady=(0, 18))
+
+        btns = ctk.CTkFrame(page, fg_color="transparent")
+        btns.grid(row=2, column=0, sticky="ew")
+        btns.grid_columnconfigure(0, weight=1)
+        btns.grid_columnconfigure(1, weight=1)
+
+        self._time_read_btn = ctk.CTkButton(
+            btns, text="读取 ESP32 时间", font=f(13), height=40,
+            corner_radius=10, fg_color=COLOR_CARD_ALT, hover_color=COLOR_CARD,
+            text_color=COLOR_TEXT, command=self._on_read_time,
+        )
+        self._time_read_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self._time_sync_btn = ctk.CTkButton(
+            btns, text="同步电脑时间到 ESP32", font=f(13, "bold"), height=40,
+            corner_radius=10, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_H,
+            text_color=COLOR_TEXT, command=self._on_sync_time,
+        )
+        self._time_sync_btn.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        return page
+
+    # ----- Weather 页 -----
+
+    def _build_weather(self) -> ctk.CTkFrame:
+        page = ctk.CTkFrame(self._content_container, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(page, text="天气推送", font=f(22, "bold"),
+                     text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w")
+
+        # 位置 + 天气合并为一个卡片
+        card = ctk.CTkFrame(page, fg_color=COLOR_CARD, corner_radius=12)
+        card.grid(row=1, column=0, sticky="ew", pady=(16, 12))
+
+        self._weather_city_lbl = ctk.CTkLabel(card, text="位置: --", font=f(11),
+                                                text_color=COLOR_MUTED)
+        self._weather_city_lbl.pack(anchor="w", padx=20, pady=(16, 4))
+
+        self._weather_temp_lbl = ctk.CTkLabel(card, text="--.-°", font=f(32, "bold"),
+                                                text_color=COLOR_TEXT)
+        self._weather_temp_lbl.pack(anchor="w", padx=20)
+
+        self._weather_desc_lbl = ctk.CTkLabel(card, text="尚未拉取", font=f(14),
+                                                text_color=COLOR_MUTED)
+        self._weather_desc_lbl.pack(anchor="w", padx=20, pady=(2, 10))
+
+        info_row = ctk.CTkFrame(card, fg_color="transparent")
+        info_row.pack(fill="x", padx=20, pady=(0, 16))
+
+        def mk_info(parent, title):
+            box = ctk.CTkFrame(parent, fg_color=COLOR_CARD_ALT, corner_radius=8)
+            box.pack(side="left", expand=True, fill="x", padx=4)
+            ctk.CTkLabel(box, text=title, font=f(10),
+                         text_color=COLOR_MUTED).pack(anchor="w", padx=10, pady=(6, 0))
+            val = ctk.CTkLabel(box, text="--", font=f(14, "bold"),
+                               text_color=COLOR_TEXT)
+            val.pack(anchor="w", padx=10, pady=(0, 6))
+            return val
+
+        self._weather_low_lbl = mk_info(info_row, "最低")
+        self._weather_high_lbl = mk_info(info_row, "最高")
+        self._weather_hum_lbl = mk_info(info_row, "湿度")
+
+        # 按钮
+        btns = ctk.CTkFrame(page, fg_color="transparent")
+        btns.grid(row=2, column=0, sticky="ew")
+        btns.grid_columnconfigure(0, weight=1)
+        btns.grid_columnconfigure(1, weight=1)
+
+        self._weather_refresh_btn = ctk.CTkButton(
+            btns, text="刷新天气", font=f(13), height=38,
+            corner_radius=10, fg_color=COLOR_CARD_ALT, hover_color=COLOR_CARD,
+            text_color=COLOR_TEXT, command=self._on_refresh_weather,
+        )
+        self._weather_refresh_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self._weather_push_btn = ctk.CTkButton(
+            btns, text="推送到 ESP32", font=f(13, "bold"), height=38,
+            corner_radius=10, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_H,
+            text_color=COLOR_TEXT, command=self._on_push_weather,
+        )
+        self._weather_push_btn.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        # 自动推送
+        auto_row = ctk.CTkFrame(page, fg_color="transparent")
+        auto_row.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+
+        self._weather_auto_var = ctk.BooleanVar(value=False)
+        self._weather_auto_switch = ctk.CTkSwitch(
+            auto_row, text=f"自动推送 (每 {AUTO_PUSH_INTERVAL_SEC // 60} 分钟)",
+            font=f(12), text_color=COLOR_TEXT,
+            progress_color=COLOR_ACCENT,
+            variable=self._weather_auto_var, command=self._on_auto_toggle,
+        )
+        self._weather_auto_switch.pack(side="left")
+
+        self._weather_auto_status = ctk.CTkLabel(page, text="", font=f(10),
+                                                   text_color=COLOR_MUTED)
+        self._weather_auto_status.grid(row=4, column=0, sticky="w", pady=(4, 0))
+
+        return page
+
+    # ----- Notify 页 -----
+
+    def _build_notify(self) -> ctk.CTkFrame:
+        page = ctk.CTkFrame(self._content_container, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(3, weight=1)  # Textbox 行可扩展
+
+        ctk.CTkLabel(page, text="通知推送", font=f(22, "bold"),
+                     text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w")
+
+        # 类别 + 优先级
+        top = ctk.CTkFrame(page, fg_color="transparent")
+        top.grid(row=1, column=0, sticky="ew", pady=(16, 8))
+
+        ctk.CTkLabel(top, text="类别", font=f(11), text_color=COLOR_MUTED
+                     ).pack(side="left", padx=(0, 6))
+        self._notify_cat_menu = ctk.CTkOptionMenu(
+            top, values=[name for name, _ in NOTIFY_CATEGORIES],
+            font=f(12), width=120,
+            fg_color=COLOR_CARD, button_color=COLOR_CARD_ALT,
+            button_hover_color=COLOR_ACCENT, text_color=COLOR_TEXT,
+            dropdown_fg_color=COLOR_CARD, dropdown_text_color=COLOR_TEXT,
+            dropdown_hover_color=COLOR_ACCENT_H,
+        )
+        self._notify_cat_menu.set("Message")
+        self._notify_cat_menu.pack(side="left", padx=(0, 16))
+
+        ctk.CTkLabel(top, text="优先级", font=f(11), text_color=COLOR_MUTED
+                     ).pack(side="left", padx=(0, 6))
+        self._notify_pri_menu = ctk.CTkOptionMenu(
+            top, values=[name for name, _ in NOTIFY_PRIORITIES],
+            font=f(12), width=100,
+            fg_color=COLOR_CARD, button_color=COLOR_CARD_ALT,
+            button_hover_color=COLOR_ACCENT, text_color=COLOR_TEXT,
+            dropdown_fg_color=COLOR_CARD, dropdown_text_color=COLOR_TEXT,
+            dropdown_hover_color=COLOR_ACCENT_H,
+        )
+        self._notify_pri_menu.set("Normal")
+        self._notify_pri_menu.pack(side="left")
+
+        # 标题
+        ctk.CTkLabel(page, text="标题", font=f(11), text_color=COLOR_MUTED
+                     ).grid(row=2, column=0, sticky="w", pady=(4, 2))
+        self._notify_title = ctk.CTkEntry(
+            page, font=f(12), height=32, fg_color=COLOR_CARD,
+            border_color=COLOR_CARD_ALT, text_color=COLOR_TEXT,
+            placeholder_text="Notification title",
+        )
+        self._notify_title.grid(row=2, column=0, sticky="ew", pady=(20, 0))
+
+        # 内容
+        body_box = ctk.CTkFrame(page, fg_color="transparent")
+        body_box.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        body_box.grid_columnconfigure(0, weight=1)
+        body_box.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(body_box, text="内容", font=f(11), text_color=COLOR_MUTED
+                     ).grid(row=0, column=0, sticky="w", pady=(0, 2))
+        self._notify_body = ctk.CTkTextbox(
+            body_box, font=f(12), height=90, fg_color=COLOR_CARD,
+            border_width=1, border_color=COLOR_CARD_ALT, text_color=COLOR_TEXT,
+            wrap="word",
+        )
+        self._notify_body.grid(row=1, column=0, sticky="nsew")
+
+        # 提示
+        ctk.CTkLabel(page,
+            text="提示: 固件字体仅支持 ASCII / 拉丁字符，中文会显示为方块。",
+            font=f(10), text_color=COLOR_MUTED,
+        ).grid(row=4, column=0, sticky="w", pady=(8, 0))
+
+        # 推送按钮
+        self._notify_push_btn = ctk.CTkButton(
+            page, text="推送通知", font=f(13, "bold"), height=42,
+            corner_radius=10, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_H,
+            text_color=COLOR_TEXT, command=self._on_push_notify,
+        )
+        self._notify_push_btn.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+
+        return page
+
+    # ----- 状态 / 按钮 -----
+
+    def _set_status(self, text: str, kind: str = "info") -> None:
+        """kind: info/success/error/busy"""
+        color = {
+            "info":    COLOR_MUTED,
+            "success": COLOR_SUCCESS,
+            "error":   COLOR_DANGER,
+            "busy":    COLOR_WARN,
+        }.get(kind, COLOR_MUTED)
+        self._status_text.configure(text=text, text_color=color)
+
+    def _refresh_state(self) -> None:
+        """根据 busy + connected 同步所有按钮 state 及侧边栏状态灯"""
+        connected = self._ble.connected
+        can_ble = (not self._busy) and connected
+
+        # 侧边栏底部
+        if self._busy:
+            dot_color = COLOR_WARN
+        elif connected:
+            dot_color = COLOR_SUCCESS
+        else:
+            dot_color = COLOR_DANGER
+        self._status_dot.configure(text_color=dot_color)
+
+        addr = self._ble.address if connected else ""
+        self._status_addr.configure(text=addr)
+
+        # Home 页
+        self._home_status_lbl.configure(
+            text="● 已连接" if connected else "● 未连接",
+            text_color=COLOR_SUCCESS if connected else COLOR_MUTED,
+        )
+        self._home_addr_lbl.configure(text=f"Address: {addr}" if addr else "")
+        self._connect_btn.configure(
+            text="断开连接" if connected else "连接设备",
+            fg_color=COLOR_DANGER if connected else COLOR_ACCENT,
+            hover_color="#DC2626" if connected else COLOR_ACCENT_H,
+            state="disabled" if self._busy else "normal",
+        )
+
+        # Time 页
+        state_ble = "normal" if can_ble else "disabled"
+        self._time_read_btn.configure(state=state_ble)
+        self._time_sync_btn.configure(state=state_ble)
+
+        # Weather 页
+        self._weather_refresh_btn.configure(state="disabled" if self._busy else "normal")
+        can_push_weather = can_ble and self._latest_weather is not None
+        self._weather_push_btn.configure(state="normal" if can_push_weather else "disabled")
+
+        # Notify 页
+        self._notify_push_btn.configure(state=state_ble)
+
+    # ----- 异步桥接 -----
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    # ----- UI 布局 -----
-
-    def _build_ui(self) -> None:
-        self.root = tk.Tk()
-        self.root.title("ESP32 BLE Companion")
-        self.root.geometry("400x720")
-        self.root.minsize(400, 600)
-        self.root.resizable(False, True)
-
-        FONT_UI = ("Microsoft YaHei UI", 10)
-        FONT_SECTION = ("Microsoft YaHei UI", 10, "bold")
-        FONT_STATUS = ("Microsoft YaHei UI", 11)
-
-        # ===== 连接区 =====
-        self.status_var = tk.StringVar(value="● 未连接")
-        self.status_label = tk.Label(self.root, textvariable=self.status_var,
-                                     fg="gray", font=FONT_STATUS)
-        self.status_label.pack(padx=12, pady=(14, 6))
-
-        self.connect_btn = ttk.Button(self.root, text=f"连接 {DEVICE_NAME}",
-                                      command=self._on_connect_click)
-        self.connect_btn.pack(fill="x", padx=12, pady=6)
-
-        # ===== 时间区 =====
-        ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Label(self.root, text="时间同步", font=FONT_SECTION).pack(anchor="w", padx=12)
-
-        self.time_var = tk.StringVar(value="ESP32 时间: --")
-        tk.Label(self.root, textvariable=self.time_var,
-                 font=("Consolas", 11)).pack(padx=12, pady=4)
-
-        time_btn_frame = tk.Frame(self.root)
-        time_btn_frame.pack(fill="x", padx=12, pady=(0, 6))
-        self.read_btn = ttk.Button(time_btn_frame, text="读取时间",
-                                   command=self._on_read_time, state="disabled")
-        self.read_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
-        self.sync_btn = ttk.Button(time_btn_frame, text="同步电脑时间",
-                                   command=self._on_sync_time, state="disabled")
-        self.sync_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
-
-        # ===== 天气区 =====
-        ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Label(self.root, text="天气推送", font=FONT_SECTION).pack(anchor="w", padx=12)
-
-        self.location_var = tk.StringVar(value="位置: --")
-        tk.Label(self.root, textvariable=self.location_var,
-                 font=FONT_UI, anchor="w").pack(fill="x", padx=12, pady=(4, 2))
-
-        self.weather_var = tk.StringVar(value="天气: --")
-        tk.Label(self.root, textvariable=self.weather_var,
-                 font=FONT_UI, anchor="w", justify="left", wraplength=370).pack(fill="x", padx=12, pady=2)
-
-        weather_btn_frame = tk.Frame(self.root)
-        weather_btn_frame.pack(fill="x", padx=12, pady=(6, 4))
-        self.refresh_weather_btn = ttk.Button(weather_btn_frame, text="刷新天气",
-                                              command=self._on_refresh_weather)
-        self.refresh_weather_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
-        self.push_weather_btn = ttk.Button(weather_btn_frame, text="推送到 ESP32",
-                                           command=self._on_push_weather, state="disabled")
-        self.push_weather_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
-
-        self.auto_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.root,
-                        text=f"自动推送（每 {AUTO_PUSH_INTERVAL_SEC // 60} 分钟）",
-                        variable=self.auto_var,
-                        command=self._on_auto_toggle).pack(anchor="w", padx=12, pady=(6, 2))
-
-        self.auto_status_var = tk.StringVar(value="")
-        tk.Label(self.root, textvariable=self.auto_status_var,
-                 fg="gray", font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=12, pady=(0, 10))
-
-        # ===== 通知推送区 =====
-        ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=12, pady=(4, 4))
-        ttk.Label(self.root, text="通知推送", font=FONT_SECTION).pack(anchor="w", padx=12)
-
-        # 外层 frame：按钮用 side="bottom" 固定在底部，永远可见
-        notify_frame = tk.Frame(self.root)
-        notify_frame.pack(fill="both", expand=True, padx=0, pady=0)
-
-        # --- 先放底部：按钮、提示（pack side=bottom 后 pack 的离中间更近） ---
-        self.push_notify_btn = ttk.Button(notify_frame, text="推送通知",
-                                          command=self._on_push_notify, state="disabled")
-        self.push_notify_btn.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
-
-        tk.Label(notify_frame,
-                 text="提示: 当前固件字体仅含 ASCII / 拉丁字符，中文会显示为方块。",
-                 fg="gray", font=("Microsoft YaHei UI", 9),
-                 wraplength=370, justify="left").pack(side="bottom", anchor="w",
-                                                       padx=12, pady=(0, 4))
-
-        # --- 再放顶部：类别行、标题、内容 ---
-        notify_top = tk.Frame(notify_frame)
-        notify_top.pack(side="top", fill="x", padx=12, pady=(4, 2))
-
-        tk.Label(notify_top, text="类别", font=FONT_UI).pack(side="left")
-        self.notify_cat_var = tk.StringVar(value=NOTIFY_CATEGORIES[1][0])
-        self.notify_cat_cb = ttk.Combobox(
-            notify_top, textvariable=self.notify_cat_var, width=10,
-            values=[name for name, _ in NOTIFY_CATEGORIES], state="readonly")
-        self.notify_cat_cb.pack(side="left", padx=(4, 12))
-
-        tk.Label(notify_top, text="优先级", font=FONT_UI).pack(side="left")
-        self.notify_pri_var = tk.StringVar(value=NOTIFY_PRIORITIES[1][0])
-        self.notify_pri_cb = ttk.Combobox(
-            notify_top, textvariable=self.notify_pri_var, width=8,
-            values=[name for name, _ in NOTIFY_PRIORITIES], state="readonly")
-        self.notify_pri_cb.pack(side="left", padx=(4, 0))
-
-        tk.Label(notify_frame, text="标题", font=FONT_UI).pack(side="top", anchor="w",
-                                                                 padx=12, pady=(2, 0))
-        self.notify_title_var = tk.StringVar()
-        ttk.Entry(notify_frame, textvariable=self.notify_title_var).pack(
-            side="top", fill="x", padx=12, pady=(2, 2))
-
-        tk.Label(notify_frame, text="内容", font=FONT_UI).pack(side="top", anchor="w",
-                                                                 padx=12)
-        self.notify_body_text = tk.Text(notify_frame, height=3, font=FONT_UI, wrap="word")
-        self.notify_body_text.pack(side="top", fill="x", padx=12, pady=(2, 4))
-
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    # ----- 状态 / 按钮 -----
-
-    def _set_status(self, text: str, color: str) -> None:
-        self.status_var.set(text)
-        self.status_label.config(fg=color)
-
-    def _refresh_buttons(self, busy: bool) -> None:
-        self.connect_btn.config(state="disabled" if busy else "normal")
-        can_ble = (not busy) and self._ble.connected
-        self.read_btn.config(state="normal" if can_ble else "disabled")
-        self.sync_btn.config(state="normal" if can_ble else "disabled")
-        self.refresh_weather_btn.config(state="disabled" if busy else "normal")
-        can_push = can_ble and self._latest_weather is not None
-        self.push_weather_btn.config(state="normal" if can_push else "disabled")
-        self.push_notify_btn.config(state="normal" if can_ble else "disabled")
-
-    # ----- 异步桥接 -----
-
     def _submit(self, coro, done_callback) -> None:
-        """提交协程到后台 loop; done_callback(exc, result) 在 Tk 主线程执行."""
-        self._refresh_buttons(busy=True)
+        self._busy = True
+        self._refresh_state()
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
 
         def on_done(fut):
@@ -444,8 +766,9 @@ class App:
             result = None if exc else fut.result()
             def finish():
                 done_callback(exc, result)
-                self._refresh_buttons(busy=False)
-            self.root.after(0, finish)
+                self._busy = False
+                self._refresh_state()
+            self.after(0, finish)
 
         future.add_done_callback(on_done)
 
@@ -453,50 +776,50 @@ class App:
 
     def _on_connect_click(self) -> None:
         if self._ble.connected:
-            self._set_status("● 断开中...", "orange")
+            self._set_status("断开中...", "busy")
 
             def done(exc, _r):
                 if exc is None:
-                    self._set_status("● 未连接", "gray")
-                    self.connect_btn.config(text=f"连接 {DEVICE_NAME}")
-                    self.time_var.set("ESP32 时间: --")
-                    # 连接断开后自动停用自动推送
-                    if self.auto_var.get():
-                        self.auto_var.set(False)
+                    self._set_status("未连接", "info")
+                    if self._weather_auto_var.get():
+                        self._weather_auto_var.set(False)
                         self._stop_auto_timer()
-                        self.auto_status_var.set("断开后已关闭自动推送")
+                        self._weather_auto_status.configure(text="断开后已关闭自动推送")
                 else:
-                    self._set_status(f"● 断开失败: {exc}", "red")
+                    self._set_status(f"断开失败: {exc}", "error")
 
             self._submit(self._ble.disconnect(), done)
         else:
-            self._set_status("● 连接中...", "orange")
+            self._set_status("连接中...", "busy")
 
             def done(exc, _r):
                 if exc is None:
-                    self._set_status("● 已连接", "green")
-                    self.connect_btn.config(text="断开")
+                    self._set_status("已连接", "success")
                 else:
-                    self._set_status(f"● 连接失败: {exc}", "red")
+                    self._set_status(f"连接失败: {exc}", "error")
 
             self._submit(self._ble.connect(), done)
 
     # ----- 时间 -----
 
+    def _render_time(self, dt: datetime) -> None:
+        self._time_lbl.configure(text=dt.strftime("%H:%M:%S"))
+        self._time_date_lbl.configure(text=dt.strftime("%Y-%m-%d  %A"))
+
     def _on_read_time(self) -> None:
-        self._set_status("● 读取中...", "orange")
+        self._set_status("读取时间...", "busy")
 
         def done(exc, result):
             if exc is None:
-                self.time_var.set(f"ESP32 时间: {result:%Y-%m-%d %H:%M:%S}")
-                self._set_status("● 已连接", "green")
+                self._render_time(result)
+                self._set_status("已连接", "success")
             else:
-                self._set_status(f"● 读取失败: {exc}", "red")
+                self._set_status(f"读取失败: {exc}", "error")
 
         self._submit(self._ble.read_time(), done)
 
     def _on_sync_time(self) -> None:
-        self._set_status("● 同步中...", "orange")
+        self._set_status("同步时间...", "busy")
         now = datetime.now()
 
         async def task():
@@ -505,17 +828,16 @@ class App:
 
         def done(exc, result):
             if exc is None:
-                self.time_var.set(f"ESP32 时间: {result:%Y-%m-%d %H:%M:%S}")
-                self._set_status("● 同步成功", "green")
+                self._render_time(result)
+                self._set_status("同步成功", "success")
             else:
-                self._set_status(f"● 同步失败: {exc}", "red")
+                self._set_status(f"同步失败: {exc}", "error")
 
         self._submit(task(), done)
 
     # ----- 天气 -----
 
     async def _fetch_weather_task(self) -> Weather:
-        """定位 + 拉取天气（同步 API 放在 executor 里，避免阻塞 event loop）"""
         loop = asyncio.get_running_loop()
         if self._location is None:
             self._location = await loop.run_in_executor(None, locate_by_ip)
@@ -523,81 +845,59 @@ class App:
         return await loop.run_in_executor(None, fetch_weather, lat, lon, city)
 
     def _render_weather(self, w: Weather) -> None:
-        lat, lon, city = self._location
-        self.location_var.set(f"位置: {city} ({lat:.4f}, {lon:.4f})")
-        self.weather_var.set(
-            f"天气: {w.temp:.1f}°C {w.desc()}, 湿度 {w.humidity}%  "
-            f"(min {w.temp_min:.0f}° / max {w.temp_max:.0f}°)"
-        )
+        lat, lon, city = self._location or (0.0, 0.0, "")
+        self._weather_city_lbl.configure(text=f"位置: {city}  ({lat:.2f}, {lon:.2f})")
+        self._weather_temp_lbl.configure(text=f"{w.temp:.1f}°")
+        color = CODE_COLOR.get(wmo_to_code(w.wmo), COLOR_ACCENT)
+        self._weather_desc_lbl.configure(text=w.desc(), text_color=color)
+        self._weather_low_lbl.configure(text=f"{w.temp_min:.0f}°")
+        self._weather_high_lbl.configure(text=f"{w.temp_max:.0f}°")
+        self._weather_hum_lbl.configure(text=f"{w.humidity}%")
 
     def _on_refresh_weather(self) -> None:
-        self._set_status("● 拉取天气...", "orange")
+        self._set_status("拉取天气...", "busy")
 
         def done(exc, w):
             if exc is None:
                 self._latest_weather = w
                 self._render_weather(w)
-                self._set_status("● 已连接" if self._ble.connected else "● 未连接",
-                                 "green" if self._ble.connected else "gray")
+                self._set_status(
+                    "已连接" if self._ble.connected else "未连接",
+                    "success" if self._ble.connected else "info",
+                )
             else:
-                self._set_status(f"● 拉取失败: {exc}", "red")
+                self._set_status(f"拉取失败: {exc}", "error")
 
         self._submit(self._fetch_weather_task(), done)
 
     def _on_push_weather(self) -> None:
         if self._latest_weather is None:
             return
-        self._set_status("● 推送中...", "orange")
+        self._set_status("推送天气...", "busy")
 
         def done(exc, _r):
             if exc is None:
-                self._set_status("● 已推送", "green")
-                self.auto_status_var.set(f"上次推送: {datetime.now():%H:%M:%S}")
+                self._set_status("天气已推送", "success")
+                self._weather_auto_status.configure(
+                    text=f"上次推送: {datetime.now():%H:%M:%S}")
             else:
-                self._set_status(f"● 推送失败: {exc}", "red")
+                self._set_status(f"推送失败: {exc}", "error")
 
         self._submit(self._ble.write_weather(self._latest_weather), done)
 
-    # ----- 通知推送 -----
-
-    def _on_push_notify(self) -> None:
-        title = self.notify_title_var.get().strip()
-        body = self.notify_body_text.get("1.0", "end-1c")
-        if not title and not body:
-            self._set_status("● 标题或内容至少填一个", "red")
-            return
-
-        cat = dict(NOTIFY_CATEGORIES)[self.notify_cat_var.get()]
-        pri = dict(NOTIFY_PRIORITIES)[self.notify_pri_var.get()]
-
-        self._set_status("● 推送通知...", "orange")
-
-        def done(exc, _r):
-            if exc is None:
-                self._set_status("● 通知已推送", "green")
-                self.notify_title_var.set("")
-                self.notify_body_text.delete("1.0", "end")
-            else:
-                self._set_status(f"● 推送失败: {exc}", "red")
-
-        self._submit(self._ble.write_notification(cat, pri, title, body), done)
-
-    # ----- 自动推送 -----
-
     def _on_auto_toggle(self) -> None:
-        if self.auto_var.get():
+        if self._weather_auto_var.get():
             if not self._ble.connected:
-                self.auto_var.set(False)
-                self._set_status("● 请先连接再开启自动推送", "red")
+                self._weather_auto_var.set(False)
+                self._set_status("请先连接再开启自动推送", "error")
                 return
-            self.auto_status_var.set("自动推送已开启")
+            self._weather_auto_status.configure(text="自动推送已开启")
             self._run_auto_cycle()
         else:
             self._stop_auto_timer()
-            self.auto_status_var.set("自动推送已关闭")
+            self._weather_auto_status.configure(text="自动推送已关闭")
 
     def _run_auto_cycle(self) -> None:
-        """立即拉取 + 推送，然后调度下一次"""
         async def task():
             w = await self._fetch_weather_task()
             self._latest_weather = w
@@ -607,25 +907,47 @@ class App:
         def done(exc, w):
             if exc is None:
                 self._render_weather(w)
-                self.auto_status_var.set(
-                    f"上次推送: {datetime.now():%H:%M:%S}  "
-                    f"下次: ~{AUTO_PUSH_INTERVAL_SEC // 60} 分钟后"
+                self._weather_auto_status.configure(
+                    text=f"上次推送: {datetime.now():%H:%M:%S}  "
+                          f"下次: ~{AUTO_PUSH_INTERVAL_SEC // 60} 分钟后"
                 )
             else:
-                self.auto_status_var.set(f"推送失败: {exc}")
+                self._weather_auto_status.configure(text=f"推送失败: {exc}")
 
-            # 下次调度；即使失败也继续尝试
-            if self.auto_var.get():
-                self._auto_timer = self.root.after(
-                    AUTO_PUSH_INTERVAL_SEC * 1000, self._run_auto_cycle
-                )
+            if self._weather_auto_var.get():
+                self._auto_timer = self.after(
+                    AUTO_PUSH_INTERVAL_SEC * 1000, self._run_auto_cycle)
 
         self._submit(task(), done)
 
     def _stop_auto_timer(self) -> None:
         if self._auto_timer is not None:
-            self.root.after_cancel(self._auto_timer)
+            self.after_cancel(self._auto_timer)
             self._auto_timer = None
+
+    # ----- 通知推送 -----
+
+    def _on_push_notify(self) -> None:
+        title = self._notify_title.get().strip()
+        body = self._notify_body.get("1.0", "end-1c")
+        if not title and not body:
+            self._set_status("标题或内容至少填一个", "error")
+            return
+
+        cat = dict(NOTIFY_CATEGORIES)[self._notify_cat_menu.get()]
+        pri = dict(NOTIFY_PRIORITIES)[self._notify_pri_menu.get()]
+
+        self._set_status("推送通知...", "busy")
+
+        def done(exc, _r):
+            if exc is None:
+                self._set_status("通知已推送", "success")
+                self._notify_title.delete(0, "end")
+                self._notify_body.delete("1.0", "end")
+            else:
+                self._set_status(f"推送失败: {exc}", "error")
+
+        self._submit(self._ble.write_notification(cat, pri, title, body), done)
 
     # ----- 关闭 -----
 
@@ -639,10 +961,10 @@ class App:
         except Exception:
             pass
         self._loop.call_soon_threadsafe(self._loop.stop)
-        self.root.destroy()
+        self.destroy()
 
     def run(self) -> None:
-        self.root.mainloop()
+        self.mainloop()
 
 
 if __name__ == "__main__":
