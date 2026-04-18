@@ -18,8 +18,8 @@ static const char *TAG = "ble_driver";
 /* BLE 设备名称 */
 #define BLE_DEVICE_NAME "ESP32-S3-DEMO"
 
-/* 连接状态 */
-static bool s_is_connected = false;
+/* 连接状态（跨线程读写：BLE host 线程写、UI 线程读） */
+static volatile bool s_is_connected = false;
 static uint16_t s_conn_handle = 0;
 
 /* 前向声明 */

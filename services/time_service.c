@@ -1,4 +1,5 @@
 #include "time_service.h"
+#include "time_manager.h"
 #include "esp_log.h"
 #include "host/ble_hs.h"
 #include "host/ble_gatt.h"
@@ -77,12 +78,13 @@ static esp_err_t cts_to_system_time(const ble_cts_current_time_t *cts_time)
     }
 
     struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
-    if (settimeofday(&tv, NULL) != 0) {
-        ESP_LOGE(TAG, "Failed to set system time");
+    esp_err_t ret = time_manager_request_set_time(&tv);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to request time update: %d", ret);
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "System time updated: %04d-%02d-%02d %02d:%02d:%02d",
+    ESP_LOGI(TAG, "System time update requested: %04d-%02d-%02d %02d:%02d:%02d",
              cts_time->year, cts_time->month, cts_time->day,
              cts_time->hour, cts_time->minute, cts_time->second);
 

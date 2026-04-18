@@ -4,6 +4,7 @@
 #include "pages/page_about.h"
 #include "page_router.h"
 #include "lvgl_port.h"
+#include "time_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -13,6 +14,7 @@ static const char *TAG = "app_main";
 static void ui_task(void *arg)
 {
     while (1) {
+        time_manager_process_pending();
         page_router_update();
         lvgl_port_task_handler();
         vTaskDelay(pdMS_TO_TICKS(10));
