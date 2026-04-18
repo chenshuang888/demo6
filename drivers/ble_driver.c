@@ -8,6 +8,7 @@
 #include "host/ble_store.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "time_service.h"
 
 /* 外部库函数声明 */
 void ble_store_config_init(void);
@@ -161,6 +162,13 @@ esp_err_t ble_driver_init(void)
 
     /* 初始化 GATT 服务 */
     ble_svc_gatt_init();
+
+    /* 初始化时间服务 */
+    ret = time_service_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize time service, error: %d", ret);
+        return ESP_FAIL;
+    }
 
     /* 设置设备名称 */
     rc = ble_svc_gap_device_name_set(BLE_DEVICE_NAME);
