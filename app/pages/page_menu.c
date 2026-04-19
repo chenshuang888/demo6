@@ -31,6 +31,7 @@ typedef struct {
     lv_obj_t *bl_item;
     lv_obj_t *weather_item;
     lv_obj_t *notify_item;
+    lv_obj_t *control_item;
     lv_obj_t *about_item;
 
     lv_obj_t *bt_status_lbl;   /* 蓝牙状态文字: "已连接"/"未连接" */
@@ -176,9 +177,9 @@ static void create_menu_list(void)
     lv_obj_t *card = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(card);
     lv_obj_add_style(card, &s_ui.style_card, 0);
-    lv_obj_set_size(card, 220, 254);  /* 5 × 50 + 边距 */
+    lv_obj_set_size(card, 220, 250);      /* 可视窗口; 内容 300 会触发垂直滚动 */
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    /* 保留默认的 SCROLLABLE 行为：6 项超出 250，可上下滑动 */
 
     /* 用 flex 纵向排列列表项 */
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -199,6 +200,10 @@ static void create_menu_list(void)
 
     s_ui.notify_item = create_list_item(card,
         LV_SYMBOL_BELL, "Notifications",
+        NULL, NULL, 0, false);
+
+    s_ui.control_item = create_list_item(card,
+        LV_SYMBOL_KEYBOARD, "Controls",
         NULL, NULL, 0, false);
 
     s_ui.about_item = create_list_item(card,
@@ -273,12 +278,18 @@ static void on_notify_clicked(lv_event_t *e)
     page_router_switch(PAGE_NOTIFICATIONS);
 }
 
+static void on_control_clicked(lv_event_t *e)
+{
+    page_router_switch(PAGE_CONTROL);
+}
+
 static void bind_events(void)
 {
     lv_obj_add_event_cb(s_ui.back_btn,     on_back_clicked,      LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.bl_item,      on_backlight_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.weather_item, on_weather_clicked,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.notify_item,  on_notify_clicked,    LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.control_item, on_control_clicked,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.about_item,   on_about_clicked,     LV_EVENT_CLICKED, NULL);
 }
 
@@ -324,7 +335,7 @@ static void page_menu_destroy(void)
     lv_style_reset(&s_ui.style_topbtn_pressed);
 
     s_ui.back_btn = NULL;
-    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.notify_item = s_ui.about_item = NULL;
+    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.notify_item = s_ui.control_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

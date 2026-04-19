@@ -10,6 +10,8 @@
 #include "time_service.h"
 #include "weather_service.h"
 #include "notify_service.h"
+#include "control_service.h"
+#include "ble_conn.h"
 
 /* 外部库函数声明 */
 void ble_store_config_init(void);
@@ -77,6 +79,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             s_is_connected = true;
             s_conn_handle = event->connect.conn_handle;
+            ble_conn_set(true, event->connect.conn_handle);
         } else {
             /* 连接失败，重新开始广播 */
             ble_driver_start_advertising();
@@ -87,6 +90,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         ESP_LOGI(TAG, "Disconnected; reason=%d", event->disconnect.reason);
         s_is_connected = false;
         s_conn_handle = 0;
+        ble_conn_set(false, 0);
 
         /* 断开连接后重新开始广播 */
         ble_driver_start_advertising();
@@ -171,6 +175,13 @@ esp_err_t ble_driver_init(void)
     ret = notify_service_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize notify service, error: %d", ret);
+        return ESP_FAIL;
+    }
+
+    /* 初始化控制服务（ESP → PC 主动事件上报） */
+    ret = control_service_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize control service, error: %d", ret);
         return ESP_FAIL;
     }
 

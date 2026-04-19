@@ -6,10 +6,12 @@ idf_component_register(
         "pages/page_about.c"
         "pages/page_weather.c"
         "pages/page_notifications.c"
+        "pages/page_control.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         framework
         drivers
+        services
         lvgl
 )

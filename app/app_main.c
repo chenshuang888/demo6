@@ -4,6 +4,7 @@
 #include "pages/page_about.h"
 #include "pages/page_weather.h"
 #include "pages/page_notifications.h"
+#include "pages/page_control.h"
 #include "page_router.h"
 #include "lvgl_port.h"
 #include "lcd_panel.h"
@@ -50,6 +51,7 @@ esp_err_t app_main_init(void)
     ESP_ERROR_CHECK(page_router_register(PAGE_ABOUT, page_about_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_WEATHER, page_weather_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_NOTIFICATIONS, page_notifications_get_callbacks()));
+    ESP_ERROR_CHECK(page_router_register(PAGE_CONTROL, page_control_get_callbacks()));
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
 

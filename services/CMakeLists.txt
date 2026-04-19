@@ -6,6 +6,8 @@ idf_component_register(
         "weather_service.c"
         "notify_manager.c"
         "notify_service.c"
+        "control_service.c"
+        "ble_conn.c"
         "persist.c"
         "settings_store.c"
     INCLUDE_DIRS
