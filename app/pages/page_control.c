@@ -1,6 +1,7 @@
 #include "page_control.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 #include "control_service.h"
 #include "ble_conn.h"
 
@@ -105,14 +106,14 @@ static void create_top_bar(void)
 
     lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
     lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     lv_obj_center(lbl);
 
     /* 连接状态 */
     s_ui.status_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.status_lbl, "Off");
     lv_obj_set_style_text_color(s_ui.status_lbl, lv_color_hex(COLOR_OFFLINE), 0);
-    lv_obj_set_style_text_font(s_ui.status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.status_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.status_lbl, LV_ALIGN_TOP_RIGHT, -14, 18);
 }
 
@@ -129,14 +130,14 @@ static lv_obj_t *create_single_button(lv_obj_t *parent, const btn_def_t *def)
     lv_obj_t *icon = lv_label_create(btn);
     lv_label_set_text(icon, def->icon);
     lv_obj_set_style_text_color(icon, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(icon, APP_FONT_LARGE, 0);
     lv_obj_align(icon, LV_ALIGN_CENTER, 0, -12);
 
     /* 文字（下方） */
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, def->label);
     lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 22);
 
     /* 用 id 作为 user_data，回调里取出 */

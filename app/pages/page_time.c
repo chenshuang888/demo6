@@ -1,6 +1,7 @@
 #include "page_time.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 #include <time.h>
 #include <sys/time.h>
 
@@ -68,7 +69,7 @@ static void init_styles(void)
     lv_style_set_border_width(&s_ui.style_btn, 0);
     lv_style_set_shadow_width(&s_ui.style_btn, 0);
     lv_style_set_text_color(&s_ui.style_btn, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_text_font(&s_ui.style_btn, &lv_font_montserrat_20);
+    lv_style_set_text_font(&s_ui.style_btn, APP_FONT_TITLE);
     lv_style_set_pad_all(&s_ui.style_btn, 0);
 
     lv_style_init(&s_ui.style_btn_pressed);
@@ -121,7 +122,7 @@ static lv_obj_t *create_small_label(lv_obj_t *parent, const char *text, uint32_t
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     return lbl;
 }
 
@@ -147,7 +148,7 @@ static void create_display_card(void)
     s_ui.time_label = lv_label_create(card);
     lv_label_set_text(s_ui.time_label, "--:--:--");
     lv_obj_set_style_text_color(s_ui.time_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(s_ui.time_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_ui.time_label, APP_FONT_LARGE, 0);
     lv_obj_align(s_ui.time_label, LV_ALIGN_CENTER, 0, 12);
 }
 

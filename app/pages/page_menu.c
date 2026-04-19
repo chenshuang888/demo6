@@ -1,6 +1,7 @@
 #include "page_menu.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 #include "ble_driver.h"
 #include "lcd_panel.h"
 #include "settings_store.h"
@@ -75,7 +76,7 @@ static void init_styles(void)
     lv_style_set_shadow_width(&s_ui.style_item, 0);
     lv_style_set_pad_all(&s_ui.style_item, 0);
     lv_style_set_text_color(&s_ui.style_item, lv_color_hex(COLOR_TEXT));
-    lv_style_set_text_font(&s_ui.style_item, &lv_font_montserrat_14);
+    lv_style_set_text_font(&s_ui.style_item, APP_FONT_TEXT);
 
     lv_style_init(&s_ui.style_item_pressed);
     lv_style_set_bg_color(&s_ui.style_item_pressed, lv_color_hex(COLOR_ACCENT));
@@ -126,14 +127,14 @@ static lv_obj_t *create_list_item(lv_obj_t *parent,
     lv_obj_t *icon_lbl = lv_label_create(item);
     lv_label_set_text(icon_lbl, icon);
     lv_obj_set_style_text_color(icon_lbl, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(icon_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(icon_lbl, APP_FONT_TITLE, 0);
     lv_obj_align(icon_lbl, LV_ALIGN_LEFT_MID, 14, 0);
 
     /* 主文字 */
     lv_obj_t *text_lbl = lv_label_create(item);
     lv_label_set_text(text_lbl, text);
     lv_obj_set_style_text_color(text_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(text_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(text_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(text_lbl, LV_ALIGN_LEFT_MID, 48, 0);
 
     /* 右侧值 */
@@ -141,7 +142,7 @@ static lv_obj_t *create_list_item(lv_obj_t *parent,
         lv_obj_t *val = lv_label_create(item);
         lv_label_set_text(val, value_init);
         lv_obj_set_style_text_color(val, lv_color_hex(value_color), 0);
-        lv_obj_set_style_text_font(val, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(val, APP_FONT_TEXT, 0);
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, -14, 0);
         if (out_value_label) *out_value_label = val;
     } else if (out_value_label == NULL) {
@@ -149,7 +150,7 @@ static lv_obj_t *create_list_item(lv_obj_t *parent,
         lv_obj_t *arrow = lv_label_create(item);
         lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_color(arrow, lv_color_hex(COLOR_MUTED), 0);
-        lv_obj_set_style_text_font(arrow, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(arrow, APP_FONT_TEXT, 0);
         lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, -14, 0);
     }
 
@@ -169,7 +170,7 @@ static void create_top_bar(void)
 
     lv_obj_t *arrow = lv_label_create(s_ui.back_btn);
     lv_label_set_text(arrow, LV_SYMBOL_LEFT " Menu");
-    lv_obj_set_style_text_font(arrow, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(arrow, APP_FONT_TEXT, 0);
     lv_obj_center(arrow);
 }
 

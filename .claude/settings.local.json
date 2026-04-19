@@ -9,7 +9,12 @@
       "Read(//c/esp_v5.4.3/v5.4.3/**)",
       "Read(//c/esp_v5.4.3/**)",
       "Read(//c/Users/ChenShuang/.espressif/**)",
-      "Read(//c/Users/ChenShuang/.espressif/python_env/**)"
+      "Read(//c/Users/ChenShuang/.espressif/python_env/**)",
+      "WebSearch",
+      "Bash(python *)",
+      "Bash(where node *)",
+      "Bash(where npm *)",
+      "Bash(where python *)"
     ]
   }
 }

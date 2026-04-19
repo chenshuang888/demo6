@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "app_fonts.c"
         "pages/page_time.c"
         "pages/page_menu.c"
         "pages/page_about.c"

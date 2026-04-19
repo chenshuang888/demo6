@@ -3,6 +3,7 @@
 
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -114,13 +115,13 @@ static void create_top_bar(void)
 
     lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
     lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     lv_obj_center(lbl);
 
     s_ui.city_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.city_lbl, "--");
     lv_obj_set_style_text_color(s_ui.city_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(s_ui.city_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.city_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.city_lbl, LV_ALIGN_TOP_RIGHT, -14, 18);
 }
 
@@ -129,13 +130,13 @@ static void create_main_display(void)
     s_ui.weather_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.weather_lbl, "Waiting...");
     lv_obj_set_style_text_color(s_ui.weather_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(s_ui.weather_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_ui.weather_lbl, APP_FONT_TITLE, 0);
     lv_obj_align(s_ui.weather_lbl, LV_ALIGN_TOP_MID, 0, 60);
 
     s_ui.temp_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.temp_lbl, "--.-");
     lv_obj_set_style_text_color(s_ui.temp_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.temp_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_ui.temp_lbl, APP_FONT_LARGE, 0);
     lv_obj_align(s_ui.temp_lbl, LV_ALIGN_TOP_MID, 0, 110);
 }
 
@@ -151,13 +152,13 @@ static void create_minmax_card(void)
     lv_obj_t *low_hint = lv_label_create(card);
     lv_label_set_text(low_hint, "Low");
     lv_obj_set_style_text_color(low_hint, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(low_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(low_hint, APP_FONT_TEXT, 0);
     lv_obj_align(low_hint, LV_ALIGN_LEFT_MID, 20, 0);
 
     s_ui.min_lbl = lv_label_create(card);
     lv_label_set_text(s_ui.min_lbl, "--");
     lv_obj_set_style_text_color(s_ui.min_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.min_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_ui.min_lbl, APP_FONT_TITLE, 0);
     lv_obj_align(s_ui.min_lbl, LV_ALIGN_LEFT_MID, 55, 0);
 
     lv_obj_t *sep = lv_obj_create(card);
@@ -170,13 +171,13 @@ static void create_minmax_card(void)
     lv_obj_t *high_hint = lv_label_create(card);
     lv_label_set_text(high_hint, "High");
     lv_obj_set_style_text_color(high_hint, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(high_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(high_hint, APP_FONT_TEXT, 0);
     lv_obj_align(high_hint, LV_ALIGN_LEFT_MID, 120, 0);
 
     s_ui.max_lbl = lv_label_create(card);
     lv_label_set_text(s_ui.max_lbl, "--");
     lv_obj_set_style_text_color(s_ui.max_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.max_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_ui.max_lbl, APP_FONT_TITLE, 0);
     lv_obj_align(s_ui.max_lbl, LV_ALIGN_LEFT_MID, 160, 0);
 }
 
@@ -203,13 +204,13 @@ static void create_info_card(void)
     lv_obj_t *k1 = lv_label_create(row1);
     lv_label_set_text(k1, "Humidity");
     lv_obj_set_style_text_color(k1, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(k1, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(k1, APP_FONT_TEXT, 0);
     lv_obj_align(k1, LV_ALIGN_LEFT_MID, 0, 0);
 
     s_ui.humidity_lbl = lv_label_create(row1);
     lv_label_set_text(s_ui.humidity_lbl, "--%");
     lv_obj_set_style_text_color(s_ui.humidity_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.humidity_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.humidity_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.humidity_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
 
     /* 更新时间行 */
@@ -223,13 +224,13 @@ static void create_info_card(void)
     lv_obj_t *k2 = lv_label_create(row2);
     lv_label_set_text(k2, "Updated");
     lv_obj_set_style_text_color(k2, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(k2, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(k2, APP_FONT_TEXT, 0);
     lv_obj_align(k2, LV_ALIGN_LEFT_MID, 0, 0);
 
     s_ui.updated_lbl = lv_label_create(row2);
     lv_label_set_text(s_ui.updated_lbl, "--:--");
     lv_obj_set_style_text_color(s_ui.updated_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.updated_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.updated_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.updated_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
 }
 

@@ -1,0 +1,13 @@
+# ESP32-S3 N16R8 partition layout (16MB)
+#   bootloader : 0x0000   (size 0x8000, 32KB, ESP-IDF 固定位置)
+#   part.table : 0x8000   (size 0x1000, 4KB)
+#   nvs        : 0x9000   (size 0x6000, 24KB)        WiFi/BT 配对、settings_store、notify_manager 快照
+#   phy_init   : 0xf000   (size 0x1000, 4KB)         RF 校准数据
+#   factory    : 0x10000  (size 0x400000, 4MB)       主应用镜像（含 CJK 字体 ~1MB，LVGL，BLE）
+#   storage    : auto     (size 0xBEF000, ~11.9MB)   预留给未来文件系统 / 字体资源 / 日志 / OTA
+#
+# Name,      Type, SubType, Offset,   Size,      Flags
+nvs,         data, nvs,     0x9000,   0x6000,
+phy_init,    data, phy,     ,         0x1000,
+factory,     app,  factory, 0x10000,  0x400000,
+storage,     data, spiffs,  ,         0xBEF000,

@@ -1,6 +1,7 @@
 #include "page_about.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 
 /* ============================================================================
  * 配色（沿用项目风格: 深紫 + 青绿）
@@ -93,7 +94,7 @@ static void create_top_bar(void)
 
     lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
     lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     lv_obj_center(lbl);
 }
 
@@ -111,7 +112,7 @@ static void create_icon_badge(void)
     lv_obj_t *icon = lv_label_create(badge);
     lv_label_set_text(icon, LV_SYMBOL_BLUETOOTH);
     lv_obj_set_style_text_color(icon, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(icon, APP_FONT_LARGE, 0);
     lv_obj_center(icon);
 }
 
@@ -121,14 +122,14 @@ static void create_title_block(void)
     lv_obj_t *name = lv_label_create(s_ui.screen);
     lv_label_set_text(name, "ESP32-S3 Demo");
     lv_obj_set_style_text_color(name, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(name, APP_FONT_TITLE, 0);
     lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 132);
 
     /* 副标题 */
     lv_obj_t *sub = lv_label_create(s_ui.screen);
     lv_label_set_text(sub, "BLE Time Sync");
     lv_obj_set_style_text_color(sub, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(sub, APP_FONT_TEXT, 0);
     lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 160);
 }
 
@@ -147,13 +148,13 @@ static void create_info_row(lv_obj_t *parent, const char *key,
     lv_obj_t *k = lv_label_create(row);
     lv_label_set_text(k, key);
     lv_obj_set_style_text_color(k, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(k, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(k, APP_FONT_TEXT, 0);
     lv_obj_align(k, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *v = lv_label_create(row);
     lv_label_set_text(v, value);
     lv_obj_set_style_text_color(v, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(v, APP_FONT_TEXT, 0);
     lv_obj_align(v, LV_ALIGN_RIGHT_MID, 0, 0);
 }
 

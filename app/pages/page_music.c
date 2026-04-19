@@ -1,6 +1,7 @@
 #include "page_music.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 #include "media_manager.h"
 #include "control_service.h"
 #include "ble_conn.h"
@@ -114,14 +115,14 @@ static void create_top_bar(void)
 
     lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
     lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     lv_obj_center(lbl);
 
     /* 顶栏右上角连接状态 */
     s_ui.status_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.status_lbl, "Off");
     lv_obj_set_style_text_color(s_ui.status_lbl, lv_color_hex(COLOR_OFFLINE), 0);
-    lv_obj_set_style_text_font(s_ui.status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.status_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.status_lbl, LV_ALIGN_TOP_RIGHT, -14, 18);
 }
 
@@ -131,7 +132,7 @@ static void create_info_block(void)
     s_ui.title_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.title_lbl, "Nothing playing");
     lv_obj_set_style_text_color(s_ui.title_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.title_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_ui.title_lbl, APP_FONT_TITLE, 0);
     lv_label_set_long_mode(s_ui.title_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_ui.title_lbl, 220);
     lv_obj_set_style_text_align(s_ui.title_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -141,7 +142,7 @@ static void create_info_block(void)
     s_ui.artist_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.artist_lbl, "--");
     lv_obj_set_style_text_color(s_ui.artist_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(s_ui.artist_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.artist_lbl, APP_FONT_TEXT, 0);
     lv_label_set_long_mode(s_ui.artist_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_ui.artist_lbl, 220);
     lv_obj_set_style_text_align(s_ui.artist_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -167,7 +168,7 @@ static void create_progress_block(void)
     s_ui.time_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.time_lbl, "--:-- / --:--");
     lv_obj_set_style_text_color(s_ui.time_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(s_ui.time_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.time_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.time_lbl, LV_ALIGN_TOP_MID, 0, 165);
 }
 
@@ -185,7 +186,7 @@ static lv_obj_t *create_ctrl_btn(const char *symbol, lv_obj_t **out_icon,
     lv_obj_t *icon = lv_label_create(btn);
     lv_label_set_text(icon, symbol);
     lv_obj_set_style_text_color(icon, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(icon, APP_FONT_TITLE, 0);
     lv_obj_center(icon);
 
     if (out_icon) {

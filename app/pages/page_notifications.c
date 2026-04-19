@@ -3,6 +3,7 @@
 
 #include "esp_log.h"
 #include "lvgl.h"
+#include "app_fonts.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -109,13 +110,13 @@ static void create_top_bar(void)
 
     lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
     lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
     lv_obj_center(lbl);
 
     s_ui.count_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.count_lbl, "0/10");
     lv_obj_set_style_text_color(s_ui.count_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(s_ui.count_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_ui.count_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(s_ui.count_lbl, LV_ALIGN_TOP_RIGHT, -14, 18);
 }
 
@@ -160,7 +161,7 @@ static void build_notification_item(lv_obj_t *parent,
     lv_obj_t *icon = lv_label_create(card);
     lv_label_set_text(icon, cs->symbol);
     lv_obj_set_style_text_color(icon, lv_color_hex(cs->color), 0);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(icon, APP_FONT_TITLE, 0);
     lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 0, 0);
 
     /* 时间 HH:MM（右上） */
@@ -173,14 +174,14 @@ static void build_notification_item(lv_obj_t *parent,
     lv_obj_t *time_lbl = lv_label_create(card);
     lv_label_set_text(time_lbl, time_buf);
     lv_obj_set_style_text_color(time_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(time_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(time_lbl, APP_FONT_TEXT, 0);
     lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, 2);
 
     /* 标题：单行省略 */
     lv_obj_t *title_lbl = lv_label_create(card);
     lv_label_set_text(title_lbl, n->title[0] ? n->title : "(no title)");
     lv_obj_set_style_text_color(title_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(title_lbl, APP_FONT_TEXT, 0);
     lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(title_lbl, 110);
     lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 32, 2);
@@ -189,7 +190,7 @@ static void build_notification_item(lv_obj_t *parent,
     lv_obj_t *body_lbl = lv_label_create(card);
     lv_label_set_text(body_lbl, n->body[0] ? n->body : "");
     lv_obj_set_style_text_color(body_lbl, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(body_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(body_lbl, APP_FONT_TEXT, 0);
     lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(body_lbl, 184);
     lv_obj_set_height(body_lbl, 36);
@@ -226,7 +227,7 @@ static void refresh_list(void)
             s_ui.empty_lbl = lv_label_create(s_ui.screen);
             lv_label_set_text(s_ui.empty_lbl, "No notifications");
             lv_obj_set_style_text_color(s_ui.empty_lbl, lv_color_hex(COLOR_MUTED), 0);
-            lv_obj_set_style_text_font(s_ui.empty_lbl, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_font(s_ui.empty_lbl, APP_FONT_TITLE, 0);
             lv_obj_center(s_ui.empty_lbl);
         }
         lv_obj_clear_flag(s_ui.empty_lbl, LV_OBJ_FLAG_HIDDEN);
