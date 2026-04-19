@@ -3,6 +3,7 @@
 #include "lvgl.h"
 #include "ble_driver.h"
 #include "lcd_panel.h"
+#include "settings_store.h"
 
 /* ============================================================================
  * 配色（与时间页一致）
@@ -247,9 +248,14 @@ static void on_backlight_clicked(lv_event_t *e)
         idx = i;
     }
     int next = (idx + 1) % (sizeof(BACKLIGHT_STEPS) / sizeof(BACKLIGHT_STEPS[0]));
-    lcd_panel_set_backlight(BACKLIGHT_STEPS[next]);
+    uint8_t duty = BACKLIGHT_STEPS[next];
+
+    /* 先持久化（语义层），再硬件生效（驱动层） */
+    settings_store_set_backlight(duty);
+    lcd_panel_set_backlight(duty);
+
     update_backlight_label();
-    ESP_LOGI(TAG, "Backlight -> %d", BACKLIGHT_STEPS[next]);
+    ESP_LOGI(TAG, "Backlight -> %d", duty);
 }
 
 static void on_about_clicked(lv_event_t *e)

@@ -6,8 +6,13 @@ idf_component_register(
         "weather_service.c"
         "notify_manager.c"
         "notify_service.c"
+        "persist.c"
+        "settings_store.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES
         bt
+    REQUIRES
+        esp_timer
+        nvs_flash
 )

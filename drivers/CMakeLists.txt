@@ -12,7 +12,6 @@ idf_component_register(
         esp_timer
         driver
         esp_lcd
-        nvs_flash
         services
     PRIV_REQUIRES
         bt

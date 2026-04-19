@@ -6,9 +6,11 @@
 #include "pages/page_notifications.h"
 #include "page_router.h"
 #include "lvgl_port.h"
+#include "lcd_panel.h"
 #include "time_manager.h"
 #include "weather_manager.h"
 #include "notify_manager.h"
+#include "settings_store.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -23,6 +25,11 @@ static void ui_task(void *arg)
         notify_manager_process_pending();
         page_router_update();
         lvgl_port_task_handler();
+
+        /* 周期性持久化（内部自判是否到时间/dirty，绝大多数 tick 即返回） */
+        notify_manager_tick_flush();
+        settings_store_tick_save_time();
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -32,6 +39,9 @@ esp_err_t app_main_init(void)
     ESP_LOGI(TAG, "Initializing application");
 
     ESP_ERROR_CHECK(lvgl_port_init());
+
+    /* 恢复上次背光亮度（lvgl_port_init 内部已初始化 lcd_panel） */
+    lcd_panel_set_backlight(settings_store_get_backlight());
 
     ESP_ERROR_CHECK(page_router_init());
 

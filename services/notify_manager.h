@@ -55,6 +55,14 @@ esp_err_t notify_manager_push(const notification_payload_t *n);
 void notify_manager_process_pending(void);
 
 /**
+ * @brief 周期性落盘（仅 UI 线程调用）
+ *
+ * 内部按 dirty + 防抖策略判断是否真正写 NVS；未满足条件时立即返回。
+ * 建议在 UI 主循环中每帧调用。
+ */
+void notify_manager_tick_flush(void);
+
+/**
  * @brief 当前存储的通知条数（0 ~ NOTIFY_STORE_MAX）
  */
 size_t notify_manager_count(void);

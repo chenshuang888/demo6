@@ -1,6 +1,5 @@
 #include "ble_driver.h"
 #include "esp_log.h"
-#include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -141,19 +140,8 @@ esp_err_t ble_driver_init(void)
 
     ESP_LOGI(TAG, "Initializing BLE driver");
 
-    /* 初始化 NVS（NimBLE 需要 NVS 存储绑定信息） */
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize NVS, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 初始化 NimBLE 协议栈 */
-    ret = nimble_port_init();
+    /* 初始化 NimBLE 协议栈（NVS 已在 app_main 通过 persist_init 完成） */
+    esp_err_t ret = nimble_port_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize NimBLE stack, error: %d", ret);
         return ESP_FAIL;
