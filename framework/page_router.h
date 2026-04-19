@@ -36,6 +36,7 @@ typedef enum {
     PAGE_WEATHER,        // 天气页面
     PAGE_NOTIFICATIONS,  // 通知页面
     PAGE_CONTROL,        // 控制面板页面（BLE 触摸按钮 → PC）
+    PAGE_MUSIC,          // 音乐副屏页面（曲目显示 + 播放控制）
     PAGE_MAX             // 页面总数（自动计算）
 } page_id_t;
 

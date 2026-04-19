@@ -5,6 +5,7 @@
   id=1  → 静音切换
   id=2  → 上一首
   id=3  → 下一首
+  id=4  → 播放/暂停
 
 依赖 (已包含在 requirements.txt):
     pip install -r requirements.txt
@@ -46,6 +47,7 @@ RECONNECT_DELAY_S = 3.0
 VK_VOLUME_MUTE      = 0xAD
 VK_MEDIA_PREV_TRACK = 0xB1
 VK_MEDIA_NEXT_TRACK = 0xB0
+VK_MEDIA_PLAY_PAUSE = 0xB3
 KEYEVENTF_KEYUP     = 0x0002
 
 
@@ -62,10 +64,11 @@ def _lock_screen() -> None:
 
 # id → (显示名, 动作函数)
 BUTTON_ACTIONS = {
-    0: ("Lock",  _lock_screen),
-    1: ("Mute",  lambda: _send_key(VK_VOLUME_MUTE)),
-    2: ("Prev",  lambda: _send_key(VK_MEDIA_PREV_TRACK)),
-    3: ("Next",  lambda: _send_key(VK_MEDIA_NEXT_TRACK)),
+    0: ("Lock",      _lock_screen),
+    1: ("Mute",      lambda: _send_key(VK_VOLUME_MUTE)),
+    2: ("Prev",      lambda: _send_key(VK_MEDIA_PREV_TRACK)),
+    3: ("Next",      lambda: _send_key(VK_MEDIA_NEXT_TRACK)),
+    4: ("PlayPause", lambda: _send_key(VK_MEDIA_PLAY_PAUSE)),
 }
 
 

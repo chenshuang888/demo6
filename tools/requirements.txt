@@ -1,3 +1,4 @@
 bleak>=0.22
 requests>=2.31
 customtkinter>=5.2.0,<6
+winsdk>=1.0.0b10; sys_platform == "win32"

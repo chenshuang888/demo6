@@ -31,6 +31,7 @@ typedef struct {
     lv_obj_t *bl_item;
     lv_obj_t *weather_item;
     lv_obj_t *notify_item;
+    lv_obj_t *music_item;
     lv_obj_t *control_item;
     lv_obj_t *about_item;
 
@@ -202,6 +203,10 @@ static void create_menu_list(void)
         LV_SYMBOL_BELL, "Notifications",
         NULL, NULL, 0, false);
 
+    s_ui.music_item = create_list_item(card,
+        LV_SYMBOL_AUDIO, "Music",
+        NULL, NULL, 0, false);
+
     s_ui.control_item = create_list_item(card,
         LV_SYMBOL_KEYBOARD, "Controls",
         NULL, NULL, 0, false);
@@ -278,6 +283,11 @@ static void on_notify_clicked(lv_event_t *e)
     page_router_switch(PAGE_NOTIFICATIONS);
 }
 
+static void on_music_clicked(lv_event_t *e)
+{
+    page_router_switch(PAGE_MUSIC);
+}
+
 static void on_control_clicked(lv_event_t *e)
 {
     page_router_switch(PAGE_CONTROL);
@@ -289,6 +299,7 @@ static void bind_events(void)
     lv_obj_add_event_cb(s_ui.bl_item,      on_backlight_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.weather_item, on_weather_clicked,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.notify_item,  on_notify_clicked,    LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.music_item,   on_music_clicked,     LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.control_item, on_control_clicked,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.about_item,   on_about_clicked,     LV_EVENT_CLICKED, NULL);
 }
@@ -335,7 +346,7 @@ static void page_menu_destroy(void)
     lv_style_reset(&s_ui.style_topbtn_pressed);
 
     s_ui.back_btn = NULL;
-    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.notify_item = s_ui.control_item = s_ui.about_item = NULL;
+    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.notify_item = s_ui.music_item = s_ui.control_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

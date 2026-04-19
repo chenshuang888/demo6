@@ -6,6 +6,8 @@ idf_component_register(
         "weather_service.c"
         "notify_manager.c"
         "notify_service.c"
+        "media_manager.c"
+        "media_service.c"
         "control_service.c"
         "ble_conn.c"
         "persist.c"

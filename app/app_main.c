@@ -5,12 +5,14 @@
 #include "pages/page_weather.h"
 #include "pages/page_notifications.h"
 #include "pages/page_control.h"
+#include "pages/page_music.h"
 #include "page_router.h"
 #include "lvgl_port.h"
 #include "lcd_panel.h"
 #include "time_manager.h"
 #include "weather_manager.h"
 #include "notify_manager.h"
+#include "media_manager.h"
 #include "settings_store.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +26,7 @@ static void ui_task(void *arg)
         time_manager_process_pending();
         weather_manager_process_pending();
         notify_manager_process_pending();
+        media_manager_process_pending();
         page_router_update();
         lvgl_port_task_handler();
 
@@ -52,6 +55,7 @@ esp_err_t app_main_init(void)
     ESP_ERROR_CHECK(page_router_register(PAGE_WEATHER, page_weather_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_NOTIFICATIONS, page_notifications_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_CONTROL, page_control_get_callbacks()));
+    ESP_ERROR_CHECK(page_router_register(PAGE_MUSIC, page_music_get_callbacks()));
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
 
