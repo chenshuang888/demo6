@@ -11,6 +11,8 @@ idf_component_register(
         "pages/page_music.c"
     INCLUDE_DIRS
         "."
+    EMBED_FILES
+        "fonts/srhs_sc_subset.ttf"
     REQUIRES
         framework
         drivers

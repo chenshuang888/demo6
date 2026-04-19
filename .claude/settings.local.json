@@ -14,7 +14,12 @@
       "Bash(python *)",
       "Bash(where node *)",
       "Bash(where npm *)",
-      "Bash(where python *)"
+      "Bash(where python *)",
+      "Bash(curl -L --progress-bar -o LXGWWenKai-Regular.ttf \"https://github.com/lxgw/LxgwWenKai/releases/download/v1.510/LXGWWenKai-Regular.ttf\")",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s \"https://api.github.com/repos/notofonts/noto-cjk/contents/Sans\")",
+      "Bash(curl -sLI -o /dev/null -w \"HTTP %{http_code}  size=%{size_download}\\\\n\" \"https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf\")",
+      "Bash(curl -sL -o NotoSansSC-Regular.ttf \"https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf\")"
     ]
   }
 }
