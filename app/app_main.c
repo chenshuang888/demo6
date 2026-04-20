@@ -1,5 +1,6 @@
 #include "app_main.h"
 #include "pages/page_time.h"
+#include "pages/page_time_adjust.h"
 #include "pages/page_menu.h"
 #include "pages/page_about.h"
 #include "pages/page_weather.h"
@@ -60,6 +61,7 @@ esp_err_t app_main_init(void)
     ESP_ERROR_CHECK(page_router_register(PAGE_NOTIFICATIONS, page_notifications_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_CONTROL, page_control_get_callbacks()));
     ESP_ERROR_CHECK(page_router_register(PAGE_MUSIC, page_music_get_callbacks()));
+    ESP_ERROR_CHECK(page_router_register(PAGE_TIME_ADJUST, page_time_adjust_get_callbacks()));
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
 

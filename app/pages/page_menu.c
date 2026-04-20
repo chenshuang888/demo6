@@ -30,6 +30,7 @@ typedef struct {
     lv_obj_t *back_btn;
     lv_obj_t *bt_item;
     lv_obj_t *bl_item;
+    lv_obj_t *time_item;
     lv_obj_t *weather_item;
     lv_obj_t *notify_item;
     lv_obj_t *music_item;
@@ -196,6 +197,10 @@ static void create_menu_list(void)
         LV_SYMBOL_EYE_OPEN, "Backlight",
         &s_ui.bl_value_lbl, "50%", COLOR_ACCENT, false);
 
+    s_ui.time_item = create_list_item(card,
+        LV_SYMBOL_SETTINGS, "Time & Date",
+        NULL, NULL, 0, false);
+
     s_ui.weather_item = create_list_item(card,
         LV_SYMBOL_IMAGE, "Weather",
         NULL, NULL, 0, false);
@@ -274,6 +279,11 @@ static void on_about_clicked(lv_event_t *e)
     page_router_switch(PAGE_ABOUT);
 }
 
+static void on_time_clicked(lv_event_t *e)
+{
+    page_router_switch(PAGE_TIME_ADJUST);
+}
+
 static void on_weather_clicked(lv_event_t *e)
 {
     page_router_switch(PAGE_WEATHER);
@@ -298,6 +308,7 @@ static void bind_events(void)
 {
     lv_obj_add_event_cb(s_ui.back_btn,     on_back_clicked,      LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.bl_item,      on_backlight_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.time_item,    on_time_clicked,      LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.weather_item, on_weather_clicked,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.notify_item,  on_notify_clicked,    LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.music_item,   on_music_clicked,     LV_EVENT_CLICKED, NULL);
@@ -347,7 +358,7 @@ static void page_menu_destroy(void)
     lv_style_reset(&s_ui.style_topbtn_pressed);
 
     s_ui.back_btn = NULL;
-    s_ui.bt_item = s_ui.bl_item = s_ui.weather_item = s_ui.notify_item = s_ui.music_item = s_ui.control_item = s_ui.about_item = NULL;
+    s_ui.bt_item = s_ui.bl_item = s_ui.time_item = s_ui.weather_item = s_ui.notify_item = s_ui.music_item = s_ui.control_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

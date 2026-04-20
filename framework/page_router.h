@@ -37,6 +37,7 @@ typedef enum {
     PAGE_NOTIFICATIONS,  // 通知页面
     PAGE_CONTROL,        // 控制面板页面（BLE 触摸按钮 → PC）
     PAGE_MUSIC,          // 音乐副屏页面（曲目显示 + 播放控制）
+    PAGE_TIME_ADJUST,    // 时间/日期调节页面（从菜单进入）
     PAGE_MAX             // 页面总数（自动计算）
 } page_id_t;
 

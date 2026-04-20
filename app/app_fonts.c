@@ -10,6 +10,7 @@ extern const uint8_t srhs_ttf_end[]   asm("_binary_srhs_sc_subset_ttf_end");
 
 lv_font_t *g_app_font_text  = NULL;
 lv_font_t *g_app_font_title = NULL;
+lv_font_t *g_app_font_huge  = NULL;
 
 void app_fonts_init(void)
 {
@@ -27,9 +28,14 @@ void app_fonts_init(void)
         srhs_ttf_start, ttf_size,
         16, LV_FONT_KERNING_NONE, 256);
 
-    if (!g_app_font_text || !g_app_font_title) {
-        ESP_LOGE(TAG, "lv_tiny_ttf_create_data_ex failed (text=%p title=%p)",
-                 g_app_font_text, g_app_font_title);
+    /* 锁屏大号时间 HH:MM 只有 0-9 和 ':' 共 11 个字符，cache 给 32 足够 */
+    g_app_font_huge = lv_tiny_ttf_create_data_ex(
+        srhs_ttf_start, ttf_size,
+        48, LV_FONT_KERNING_NONE, 32);
+
+    if (!g_app_font_text || !g_app_font_title || !g_app_font_huge) {
+        ESP_LOGE(TAG, "lv_tiny_ttf_create_data_ex failed (text=%p title=%p huge=%p)",
+                 g_app_font_text, g_app_font_title, g_app_font_huge);
         return;
     }
 
@@ -37,4 +43,5 @@ void app_fonts_init(void)
      * fallback 到 Montserrat 画 LV_SYMBOL_LEFT / PLAY / BLUETOOTH 等图标。 */
     g_app_font_text->fallback  = &lv_font_montserrat_14;
     g_app_font_title->fallback = &lv_font_montserrat_20;
+    g_app_font_huge->fallback  = &lv_font_montserrat_24;
 }
