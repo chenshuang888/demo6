@@ -25,6 +25,8 @@ import ctypes
 import struct
 import sys
 import time as _time
+from datetime import datetime
+from typing import Awaitable, Callable, Optional
 
 from bleak import BleakClient, BleakScanner
 
@@ -45,10 +47,23 @@ except ImportError:
 DEVICE_NAME         = "ESP32-S3-DEMO"
 CONTROL_CHAR_UUID   = "8a5c0006-0000-4aef-b87e-4fa1e0c7e0f6"   # Notify (ESP → PC)
 MEDIA_CHAR_UUID     = "8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP)
+CTS_CHAR_UUID       = "00002a2b-0000-1000-8000-00805f9b34fb"   # Write  (PC → ESP, 时间同步)
 
 # control_event_t: type u8, id u8, action u8, _r u8, value i16, seq u16  → 8 B
 EVENT_STRUCT = "<BBBBhH"
 EVENT_SIZE   = struct.calcsize(EVENT_STRUCT)
+
+# control_event_t.type 枚举（与固件 control_service.h 对齐）
+EVENT_TYPE_BUTTON  = 0
+EVENT_TYPE_REQUEST = 2
+
+# REQUEST 事件的 id 语义
+REQUEST_TIME_SYNC  = 0
+
+# CTS (Current Time Service) 结构：与 services/time_service.c 的 ble_cts_current_time_t 对齐
+# year u16, month u8, day u8, hour u8, minute u8, second u8,
+# day_of_week u8 (1=Mon..7=Sun), fractions256 u8, adjust_reason u8  → 10 B
+CTS_STRUCT = "<HBBBBBBBB"
 
 # media_payload_t: playing u8, _r u8, pos i16, dur i16, _pad u16,
 #                  sample_ts u32, title 48s, artist 32s  → 92 B
@@ -107,6 +122,12 @@ class ControlHandler:
     def __init__(self, dry_run: bool):
         self.dry_run = dry_run
         self._last_seq: int | None = None
+        # ESP 反向请求 PC 推送时间的回调，由 run_session 在连接建立后注入
+        self._time_sync_cb: Optional[Callable[[], Awaitable[None]]] = None
+
+    def set_time_sync_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
+        """连接期间把 push_cts 闭包挂到 handler；断开时传 None 清除。"""
+        self._time_sync_cb = cb
 
     def on_notify(self, _handle: int, data: bytearray) -> None:
         if len(data) != EVENT_SIZE:
@@ -116,7 +137,19 @@ class ControlHandler:
         type_, btn_id, action, _r, value, seq = struct.unpack(
             EVENT_STRUCT, bytes(data))
 
-        if type_ != 0 or action != 0:
+        # ESP → PC 请求事件（目前只有 TIME_SYNC）
+        if type_ == EVENT_TYPE_REQUEST:
+            if btn_id == REQUEST_TIME_SYNC:
+                log(f"[req] time_sync seq={seq}")
+                if self._time_sync_cb is not None:
+                    asyncio.create_task(self._time_sync_cb())
+                else:
+                    log("[warn] time_sync 请求到达但未安装回调")
+            else:
+                log(f"[warn] 未知 request id={btn_id} seq={seq}")
+            return
+
+        if type_ != EVENT_TYPE_BUTTON or action != 0:
             log(f"[info] 忽略 ctrl type={type_} action={action} id={btn_id} seq={seq}")
             return
 
@@ -303,6 +336,28 @@ class MediaPublisher:
 # 会话生命周期（一个 BleakClient 同时承载 notify + write）
 # ---------------------------------------------------------------------------
 
+async def push_cts(client: BleakClient) -> None:
+    """把 PC 当前本地时间打包成 CTS 结构写给 ESP。
+
+    ESP 在连上 PC 订阅 control_char 后会主动请求一次，
+    以解决设备上电时间不准的问题（无 WiFi / SNTP 可用）。
+    """
+    now = datetime.now()
+    data = struct.pack(
+        CTS_STRUCT,
+        now.year, now.month, now.day,
+        now.hour, now.minute, now.second,
+        now.isoweekday(),   # 1=Mon..7=Sun，与 ble_cts_current_time_t.day_of_week 对齐
+        0,                  # fractions256：未知
+        0,                  # adjust_reason：无
+    )
+    try:
+        await client.write_gatt_char(CTS_CHAR_UUID, data, response=True)
+        log(f"[cts] pushed {now:%Y-%m-%d %H:%M:%S}")
+    except Exception as e:
+        log(f"[err] cts 推送失败: {e}")
+
+
 async def run_session(ctrl: ControlHandler) -> None:
     log(f"扫描 {DEVICE_NAME}...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT_S)
@@ -312,6 +367,9 @@ async def run_session(ctrl: ControlHandler) -> None:
     log(f"命中 {device.address}，连接中...")
     async with BleakClient(device) as client:
         loop = asyncio.get_running_loop()
+
+        # 把 time_sync 回调注入 handler；ESP 在我们 start_notify 后会请求一次
+        ctrl.set_time_sync_cb(lambda: push_cts(client))
 
         # 1) 订阅控制按钮
         await client.start_notify(CONTROL_CHAR_UUID, ctrl.on_notify)
@@ -333,6 +391,7 @@ async def run_session(ctrl: ControlHandler) -> None:
                 await client.stop_notify(CONTROL_CHAR_UUID)
             except Exception:
                 pass
+            ctrl.set_time_sync_cb(None)
         log("连接断开")
 
 

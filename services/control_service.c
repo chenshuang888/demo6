@@ -118,3 +118,48 @@ esp_err_t control_service_send_button(uint8_t id)
     ESP_LOGI(TAG, "button event sent: id=%u seq=%u", id, evt.seq);
     return ESP_OK;
 }
+
+esp_err_t control_service_send_request(uint8_t req_id)
+{
+    uint16_t conn_handle;
+    if (!ble_conn_get_handle(&conn_handle)) {
+        ESP_LOGD(TAG, "not connected, drop request id=%u", req_id);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    control_event_t evt = {
+        .type       = CONTROL_EVENT_TYPE_REQUEST,
+        .id         = req_id,
+        .action     = 0,
+        ._reserved  = 0,
+        .value      = 0,
+        .seq        = ++s_seq,
+    };
+
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&evt, sizeof(evt));
+    if (!om) {
+        ESP_LOGW(TAG, "mbuf alloc failed");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int rc = ble_gatts_notify_custom(conn_handle, s_chr_val_handle, om);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "notify failed rc=%d (client may not subscribe)", rc);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "request sent: id=%u seq=%u", req_id, evt.seq);
+    return ESP_OK;
+}
+
+void control_service_on_subscribe(uint16_t attr_handle,
+                                  uint8_t prev_notify,
+                                  uint8_t cur_notify)
+{
+    /* 只关心 PC 订阅本服务的 notify 上升沿 */
+    if (attr_handle != s_chr_val_handle) return;
+    if (prev_notify || !cur_notify) return;
+
+    ESP_LOGI(TAG, "client subscribed, requesting time sync");
+    control_service_send_request(CONTROL_REQUEST_TIME_SYNC);
+}
