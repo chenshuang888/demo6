@@ -1,141 +1,129 @@
-# Playbook：ESP → PC 主动请求模式（复用 Control Service 的 NOTIFY + REQUEST id）
+# Playbook：ESP → PC 主动请求模式（每业务 service 自管 NOTIFY）
 
 ## 上下文签名
 
 - 目标平台：ESP32 + NimBLE（Peripheral 角色）
 - 对端：PC / 手机（Central 角色）
-- 场景：上电 / 重连 / 页面切换时，ESP 需要 PC 补推"天气 / 时间 / 正在播放"等数据
-- 现有基础设施：已有 `control_service`（ESP → PC NOTIFY 通道，承载按钮事件）
+- 场景：上电 / 重连 / 页面切换时，ESP 需要 PC 补推"天气 / 时间 / 系统监控"等数据
+- 现有基础设施：每个业务 service（time / weather / system / ...）已有自己的 GATT characteristic
 
 ## 目标
 
 让 ESP 能主动向 PC 发出"请给我 X 类数据"的请求，而**不需要**：
-- 引入新的 GATT service / characteristic
 - 让 ESP 切到 Central 角色去主动读 PC
 - 轮询等待 PC 定时推送
+- 把触发端与响应端拆到两个不相关的 service（触发/响应跨 service 会让"这个协议到底属于谁"变得模糊）
 
 成功标准：
-- 订阅 `control_service` 后 ESP 自动发一次 `REQUEST_TIME_SYNC`，PC 在 ≤500ms 内回写时间
-- 切到天气页时 ESP 发 `REQUEST_WEATHER`，PC 回写天气
-- 所有 REQUEST 共享一个 NOTIFY characteristic，通过 `type = REQUEST` + `id = <请求类型>` 区分
+- PC 端订阅业务 service 的 NOTIFY char 时，ESP 自动发一次请求，PC 在 ≤500ms 内用同 service 的 WRITE char 回写
+- 页面切换时 ESP 调 `<service>_service_send_request()`，PC 行为同上
+- 每个 NOTIFY 只承载 1 字节递增 seq 作为哨兵，不跨 service 复用通道
 
 ## 不变式（可直接复用）
 
-1. **Peripheral 用 NOTIFY，Central 用 WRITE**：一条既有的 NOTIFY characteristic 就足够表达"请求"
-2. **type + id 多路复用**：同一 characteristic 的 payload 里用 `type` 字段区分不同语义（BUTTON / REQUEST / 未来更多）
-3. **请求带 seq**：每次 REQUEST 递增 `seq`，PC 回写时可选择性带回 `req_seq` 做去重/对账
-4. **响应走既有 service**：weather REQUEST → PC 用 weather characteristic WRITE；time REQUEST → PC 用 CTS WRITE；**不要**把响应塞回 control NOTIFY
+1. **触发端与响应端同在一个 service 内**：`time_service` 自己管"请求时间同步"和"接收 CTS 写入"；`weather_service` 同理。别把请求信号塞到无关 service 的 NOTIFY 上。
+2. **NOTIFY payload 固定极短**：1 字节递增 seq 足够。语义是"信号"而非"数据"；真正的数据由 PC 走同 service 的 WRITE char 回写。
+3. **订阅上升沿自动触发一次**：`<svc>_on_subscribe(attr, prev, cur)` 检测 `prev==0 && cur==1`，调一次 `<svc>_send_request()`，覆盖"连上立即同步"的场景。
+4. **Peripheral 用 NOTIFY，Central 用 WRITE**：方向不变，ESP 无须成为 Central。
 
-## 参数清单（必须由当前项目提供）
+## 参数清单（当前项目的落地）
 
-- **NOTIFY payload 结构**：本项目 `control_event_t` 8 字节 `<BBBBhH>`（type / id / action / reserved / value / seq）
-- **REQUEST id 枚举表**：`CONTROL_REQUEST_TIME_SYNC=1` / `CONTROL_REQUEST_WEATHER=2` / `CONTROL_REQUEST_MEDIA=3` / ...（按项目扩充）
-- **响应超时**：业务侧决定（本项目不设硬超时，页面下次进入再重发）
-- **订阅回调钩子**：`control_service_on_subscribe(handle, prev, cur)` 在订阅上升沿触发
+- **NOTIFY payload**：1 字节 `uint8_t seq`（每个 service 独立 seq，wrap-around 可接受，因为 PC 端不强依赖去重）
+- **UUID 分配**：业务 service 的"请求 char"按 `ble-custom-uuid-allocation-decision-record.md` 的"单 service char 数 >2 时末尾追加"规则分配：
+  - `weather_service`: write `0x8a5c0002` / notify-req `0x8a5c000B`
+  - `system_service`: write `0x8a5c000A` / notify-req `0x8a5c000C`
+  - `time_service`: CTS 标准 char `0x2A2B` 同时 WRITE+NOTIFY（不新增 UUID，直接复用 NOTIFY flag）
+- **订阅回调钩子**：每个业务 service 导出 `*_service_on_subscribe(handle, prev, cur)`，由 `drivers/ble_driver.c` 的 SUBSCRIBE 分支逐个调用
 
 ## 前置条件
 
-- `control_service` 已注册（`control_service_init` 返回 ESP_OK）
-- `ble_conn` 能拿到当前 `conn_handle`（`ble_conn_get_handle` 返回 true）
-- PC 端订阅了 `control_service` 的 NOTIFY characteristic
-- PC 端能解析 `type = REQUEST` 分支并用对应的 characteristic 回写
+- 对应业务 service 已注册（`<svc>_service_init` 返回 ESP_OK）
+- `ble_conn` 能拿到当前 `conn_handle`
+- PC 端分别 `start_notify` 了各业务的 notify char（不是只订阅 control）
+- PC 端对每个 notify 注册一个独立 handler，在 handler 里调用对应的 push 函数
 
 ## 设计边界
 
-- **不做**：为每种 REQUEST 单独建 GATT characteristic（会炸 MTU / 增加 discovery 成本）
-- **不做**：ESP 切 Central 角色去 read PC（BLE 4.2 Peripheral 做不到，也没必要）
-- **不做**：在 NOTIFY 里塞长字符串（payload 固定 8 字节，需要更多数据时拆多次 REQUEST）
-- **先做最小闭环**：TIME_SYNC 单个 REQUEST 跑通，再扩展 WEATHER / MEDIA
-
-## 可替换点（示例映射）
-
-- `control_event_t` 8 字节结构可替换为任何带 `type/id/seq` 的定长结构
-- REQUEST id 枚举值由项目自定义（本项目用 1/2/3；其他项目可用 UUID 前缀 / magic number）
-- 订阅回调的"自动触发首次 REQUEST"逻辑可按需开关
+- **不做**：再建一个"集中式请求 service"代理所有请求（会回到触发/响应分属两地的老坑）
+- **不做**：在 control_service 里塞 REQUEST type（已废弃，见重构记录）
+- **不做**：在 NOTIFY body 里塞大段参数（需要参数时，请求方先改 WRITE 再触发请求；NOTIFY 只做信号）
+- **先做最小闭环**：单一 service 的请求跑通，再扩到 2 ~ 3 个
 
 ## 分层与职责
 
-- **`control_service.c`（GATT 层，NimBLE host 线程）**：
-  - 提供 `control_service_send_request(req_id)`：组 `control_event_t` + `ble_gatts_notify_custom`
-  - `control_service_on_subscribe(...)` 在上升沿自动调 `send_request(TIME_SYNC)`
-- **业务层（UI 线程 / 各 manager）**：
-  - 页面 enter 时调 `control_service_send_request(<对应 id>)`
-  - 各 service（weather / time / notify / media）保持现有接收逻辑不变，不感知 REQUEST 机制
+- **`<business>_service.c`（GATT 层，NimBLE host 线程）**：
+  - GATT 表内定义 write char 和 notify char 两个 characteristic（time 例外：同 char 同时 WRITE+NOTIFY）
+  - `<svc>_service_send_request(void)`：组 1B seq payload + `ble_gatts_notify_custom`
+  - `<svc>_service_on_subscribe(attr, prev, cur)`：匹配本服务的 notify char val_handle + 上升沿检测 + 触发 `send_request`
+- **业务层（UI 线程）**：
+  - 页面 enter 时调 `<svc>_service_send_request()`（幂等；未连接时静默丢弃）
+- **drivers/ble_driver.c（GAP 层）**：
+  - `BLE_GAP_EVENT_SUBSCRIBE` 分支遍历所有业务 service 的 `on_subscribe` 钩子，各自判断是否是自己的 char
 - **PC 端**：
-  - 订阅 control NOTIFY，解析 payload
-  - 若 `type == REQUEST`，按 `id` 用对应 service 的 write characteristic 回写数据
-  - 可选：带上 `req_seq` 做去重
+  - `start_notify(<svc>_req_uuid, handler)`，每个 handler 只负责调对应 push 函数（`push_cts` / `push_weather` / `sys_pub.push_now`）
+  - 不做跨 service 路由，不共享 handler
 
-## 实施步骤
+## 实施步骤（添加一个新业务 service 的反向请求）
 
-1. **定义 REQUEST 枚举**（`services/control_service.h`）：
+1. **GATT 表加 notify char**：在 `<svc>_service.c` 的 `ble_gatt_svc_def` 里新增一个 `BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY` 的 characteristic，UUID 按 DR 规则分配，val_handle 存独立 static。
 
+2. **送 request 函数**：
    ```c
-   typedef enum {
-       CONTROL_EVENT_TYPE_BUTTON  = 0,
-       CONTROL_EVENT_TYPE_REQUEST = 1,
-   } control_event_type_t;
-
-   typedef enum {
-       CONTROL_REQUEST_TIME_SYNC = 1,
-       CONTROL_REQUEST_WEATHER   = 2,
-       CONTROL_REQUEST_MEDIA     = 3,
-   } control_request_id_t;
+   esp_err_t <svc>_service_send_request(void) {
+       uint16_t conn;
+       if (!ble_conn_get_handle(&conn)) return ESP_ERR_INVALID_STATE;
+       uint8_t payload = ++s_req_seq;
+       struct os_mbuf *om = ble_hs_mbuf_from_flat(&payload, 1);
+       return ble_gatts_notify_custom(conn, s_req_val_handle, om) ? ESP_FAIL : ESP_OK;
+   }
    ```
 
-2. **扩展 `control_service`**（参考本项目 `services/control_service.c:122-153`）：
-
+3. **订阅钩子**：
    ```c
-   esp_err_t control_service_send_request(uint8_t req_id);
-   void      control_service_on_subscribe(uint16_t attr, uint8_t prev, uint8_t cur);
+   void <svc>_service_on_subscribe(uint16_t attr, uint8_t prev, uint8_t cur) {
+       if (attr != s_req_val_handle) return;
+       if (prev || !cur) return;
+       <svc>_service_send_request();
+   }
    ```
 
-   实现里复用 `control_event_t` struct，只改 `type = CONTROL_EVENT_TYPE_REQUEST`，`id = req_id`。
+4. **ble_driver 挂接**：`drivers/ble_driver.c` SUBSCRIBE 分支补一行调 `<svc>_service_on_subscribe(attr, prev, cur)`。
 
-3. **订阅钩子挂接 GAP event**：在 `drivers/ble_driver.c` 的 `gap_event_cb` 里，收到 `BLE_GAP_EVENT_SUBSCRIBE` 时调：
-
-   ```c
-   control_service_on_subscribe(event->subscribe.attr_handle,
-                                event->subscribe.prev_notify,
-                                event->subscribe.cur_notify);
-   ```
-
-4. **页面 enter 发 REQUEST**（可选）：
-
-   ```c
-   // page_weather.c enter
-   control_service_send_request(CONTROL_REQUEST_WEATHER);
-   ```
-
-5. **PC 端解析**（Python bleak 参考）：
-
+5. **PC 端订阅**：`tools/desktop_companion.py` 的 `run_session` 里：
    ```python
-   async def on_control_notify(sender, data):
-       type_, id_, action, _, value, seq = struct.unpack('<BBBBhH', data)
-       if type_ == 1:  # REQUEST
-           if id_ == 1:   await write_cts_time()
-           elif id_ == 2: await write_weather()
-           elif id_ == 3: await write_media()
-       elif type_ == 0:  # BUTTON
-           handle_button(id_, action, value, seq)
+   await client.start_notify(
+       <SVC>_REQ_CHAR_UUID,
+       make_request_handler("<name>", lambda: push_<svc>(client)),
+   )
    ```
+
+6. **页面触发点**（可选，只在"进入页面立即要数据"的语义场景用）：`page_<svc>.c` 的 enter 调 `<svc>_service_send_request()`。
 
 ## 停手规则
 
-- 已经为 REQUEST 新建 GATT characteristic：**停**，先想"既有 NOTIFY characteristic 是否足够表达"
-- REQUEST payload 超过现有定长 struct：**停**，不要塞长字符串，拆多次 REQUEST 或用 `value` 字段编码参数
-- PC 端收到 REQUEST 后在 NOTIFY 上回写：**停**，响应走对应 service 的 write characteristic
+- 把新业务的请求塞到已有其他 service 的 notify：**停**。除非有强绑定语义（如"订阅 time 时也要推天气"），否则各管各的。
+- 在 NOTIFY body 里塞业务数据：**停**。NOTIFY 只做信号；业务数据走 WRITE。
+- 不加 `on_subscribe` 只在 UI 里发 request：**停**。连上但没 enter 页面就永远不会触发"初次同步"，会导致"上电后时间/天气空白"这类 bug。
 
 ## 验证顺序
 
-1. 最小冒烟：TIME_SYNC REQUEST 跑通（订阅后 PC 收到 `type=1, id=1`，并 WRITE CTS）
-2. 扩展验证：进天气页 → WEATHER REQUEST → PC 回写 weather payload → UI 更新
-3. 压力：反复订阅 / 取消订阅 50 次，REQUEST 计数和日志匹配
-4. 边界：未订阅状态下发 REQUEST，`ble_conn_get_handle` 返回 false，日志 `not connected, drop`
+1. 最小冒烟：PC 端 `start_notify(<svc>_req_uuid)` 上升沿 → ESP 日志 `svc request sent: seq=1` → PC 日志 `[req] <svc> seq=1` → WRITE char 回调数据
+2. 幂等：页面反复 enter/exit，每次 send_request 日志 seq 递增、PC 端每次都能触发 push（time 无副作用，weather 进入缓存，system 覆写最后一帧）
+3. 断连重连：断开时 `ble_conn_get_handle` 返回 false，日志 `not connected, drop <svc> request`；重连后首次 subscribe 上升沿自动触发
+4. UUID 冲突：扫描 GATT 表确认 notify char 在 service 下的位置，确认 PC 端 `start_notify` UUID 拼写一致
 
 ## 常见问题
 
-- REQUEST 发出但 PC 没反应 → 检查 PC 端 NOTIFY 订阅是否成功（`start_notify(control_uuid)`）
-- 订阅上升沿触发的 TIME_SYNC 丢失 → PC 端 `start_notify` 可能先于 handler 注册，确保 handler 先挂再 `start_notify`
+- REQUEST 发出但 PC 没反应 → PC 端是否 `start_notify` 了对应 char？（不是订阅了 control 就万事大吉）
+- 订阅上升沿触发的请求丢失 → PC 先 `start_notify` 再 handler 绑定；或 handler 先建好再 `start_notify`
 - NOTIFY 发不出去（`notify failed rc=-1`）→ MTU / `flags` 配置 / characteristic 没开 `BLE_GATT_CHR_F_NOTIFY`
-- PC 端把 REQUEST 当 BUTTON 处理 → 解析时没判 `type` 字段就直接看 `id`
+- 两个 service 的 req char UUID 混淆 → 在文件顶部用注释写清楚 short code；UUID DR 表格同步维护
+
+## 迁移说明（从旧模式换过来）
+
+旧模式（v1）：集中在 `control_service` 的 NOTIFY 上用 `type=REQUEST + id=<req>`。已废弃，原因：
+- 触发端（control）与响应端（time/weather/system write char）跨 service，维护时难定位
+- 新增 REQUEST 必须同步改 control 的 enum 和 PC 端路由表，复杂度随业务线性上升
+- `control_service` 的名字与实际承载的语义漂移（不再是纯"控制"）
+
+当前模式（v2）：本文档所述。迁移后 `control_service` 回归"按钮事件通道"单一职责。

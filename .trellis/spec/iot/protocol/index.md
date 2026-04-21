@@ -16,5 +16,5 @@
 
 ### 跨 Service 模式与分配规则（本项目专属）
 
-- `./esp-to-pc-notify-request-pattern-playbook.md`：ESP 主动向 PC 请求数据：复用 control service NOTIFY + `type=REQUEST + id=<请求类型>`，不新建 GATT service，也不切 Central 角色。
+- `./esp-to-pc-notify-request-pattern-playbook.md`：ESP 主动向 PC 请求数据：每个业务 service 自管一个 NOTIFY char（time 复用 CTS 的 NOTIFY flag；weather/system 分配独立 req char），触发端与响应端同在一个 service 内。
 - `./ble-custom-uuid-allocation-decision-record.md`：5 个自定义服务的 UUID 分配方案（全局 base `8a5c0000...` + 奇偶短码配对），以及扩展规则。

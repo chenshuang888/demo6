@@ -1,5 +1,6 @@
 #include "time_service.h"
 #include "time_manager.h"
+#include "ble_conn.h"
 #include "esp_log.h"
 #include "host/ble_hs.h"
 #include "host/ble_gatt.h"
@@ -29,9 +30,8 @@ typedef struct {
 /* 特征值句柄 */
 static uint16_t current_time_val_handle;
 
-/* 连接状态 */
-static bool s_notify_enabled = false;
-static uint16_t s_conn_handle = 0;
+/* 反向请求 seq，单调递增（PC 端去重） */
+static uint8_t s_req_seq = 0;
 
 /* 前向声明 */
 static int current_time_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -201,28 +201,38 @@ esp_err_t time_service_init(void)
     return ESP_OK;
 }
 
-esp_err_t time_service_notify_time_changed(void)
+esp_err_t time_service_send_request(void)
 {
-    if (!s_notify_enabled) {
-        ESP_LOGW(TAG, "Notification not enabled");
-        return ESP_FAIL;
+    uint16_t conn_handle;
+    if (!ble_conn_get_handle(&conn_handle)) {
+        ESP_LOGD(TAG, "not connected, drop time request");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    ble_cts_current_time_t cts_time;
-    system_time_to_cts(&cts_time);
-
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(&cts_time, sizeof(cts_time));
-    if (om == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate mbuf");
-        return ESP_FAIL;
+    uint8_t payload = ++s_req_seq;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&payload, sizeof(payload));
+    if (!om) {
+        ESP_LOGW(TAG, "mbuf alloc failed");
+        return ESP_ERR_NO_MEM;
     }
 
-    int rc = ble_gatts_notify_custom(s_conn_handle, current_time_val_handle, om);
+    int rc = ble_gatts_notify_custom(conn_handle, current_time_val_handle, om);
     if (rc != 0) {
-        ESP_LOGE(TAG, "Failed to send notification, error: %d", rc);
+        ESP_LOGW(TAG, "notify failed rc=%d (client may not subscribe)", rc);
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Time change notification sent");
+    ESP_LOGI(TAG, "time request sent: seq=%u", payload);
     return ESP_OK;
+}
+
+void time_service_on_subscribe(uint16_t attr_handle,
+                               uint8_t prev_notify,
+                               uint8_t cur_notify)
+{
+    if (attr_handle != current_time_val_handle) return;
+    if (prev_notify || !cur_notify) return;
+
+    ESP_LOGI(TAG, "client subscribed CTS, requesting time sync");
+    time_service_send_request();
 }

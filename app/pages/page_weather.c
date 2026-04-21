@@ -1,6 +1,6 @@
 #include "page_weather.h"
 #include "weather_manager.h"
-#include "control_service.h"
+#include "weather_service.h"
 
 #include "esp_log.h"
 #include "lvgl.h"
@@ -324,7 +324,7 @@ static lv_obj_t *page_weather_create(void)
 
     /* 进入页面立刻向 PC 请求最新天气；未连接/未订阅时静默失败，
      * UI 继续展示 weather_manager 里的旧快照。PC 端 10 分钟缓存防 API 爆量。 */
-    control_service_send_request(CONTROL_REQUEST_WEATHER);
+    weather_service_send_request();
 
     return s_ui.screen;
 }

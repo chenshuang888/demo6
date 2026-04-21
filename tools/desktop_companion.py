@@ -32,7 +32,7 @@ import sys
 import time as _time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Awaitable, Callable, Optional
+from typing import Optional
 
 import psutil
 import requests
@@ -58,25 +58,22 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 DEVICE_NAME         = "ESP32-S3-DEMO"
-CONTROL_CHAR_UUID   = "8a5c0006-0000-4aef-b87e-4fa1e0c7e0f6"   # Notify (ESP → PC)
+CONTROL_CHAR_UUID   = "8a5c0006-0000-4aef-b87e-4fa1e0c7e0f6"   # Notify (ESP → PC, button)
 MEDIA_CHAR_UUID     = "8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP)
-CTS_CHAR_UUID       = "00002a2b-0000-1000-8000-00805f9b34fb"   # Write  (PC → ESP, 时间同步)
+CTS_CHAR_UUID       = "00002a2b-0000-1000-8000-00805f9b34fb"   # Write+Notify (PC 写 CTS / ESP 发 notify 请求时间同步)
 WEATHER_CHAR_UUID   = "8a5c0002-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 天气推送)
+WEATHER_REQ_CHAR_UUID = "8a5c000b-0000-4aef-b87e-4fa1e0c7e0f6" # Notify (ESP → PC, 请求天气)
 NOTIFY_CHAR_UUID    = "8a5c0004-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 通知推送)
 SYSTEM_CHAR_UUID    = "8a5c000a-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 系统监控)
+SYSTEM_REQ_CHAR_UUID = "8a5c000c-0000-4aef-b87e-4fa1e0c7e0f6"  # Notify (ESP → PC, 请求系统数据)
 
 # control_event_t: type u8, id u8, action u8, _r u8, value i16, seq u16  → 8 B
 EVENT_STRUCT = "<BBBBhH"
 EVENT_SIZE   = struct.calcsize(EVENT_STRUCT)
 
 # control_event_t.type 枚举（与固件 control_service.h 对齐）
+# 反向请求（time/weather/system）改由各业务 char 的 notify 承担，不再复用此通道
 EVENT_TYPE_BUTTON  = 0
-EVENT_TYPE_REQUEST = 2
-
-# REQUEST 事件的 id 语义
-REQUEST_TIME_SYNC  = 0
-REQUEST_WEATHER    = 1
-REQUEST_SYSTEM     = 2
 
 # CTS (Current Time Service) 结构：与 services/time_service.c 的 ble_cts_current_time_t 对齐
 # year u16, month u8, day u8, hour u8, minute u8, second u8,
@@ -289,27 +286,14 @@ BUTTON_ACTIONS = {
 
 
 class ControlHandler:
-    """解析 control_char 的 8 字节事件，做去重 + 执行动作。"""
+    """解析 control_char 的 8 字节按钮事件，做去重 + 执行 Windows 动作。
+
+    反向请求（time/weather/system）已拆到各自业务 char 的 notify，不再走这里。
+    """
 
     def __init__(self, dry_run: bool):
         self.dry_run = dry_run
         self._last_seq: int | None = None
-        # ESP 反向请求 PC 推送时间/天气的回调，由 run_session 在连接建立后注入
-        self._time_sync_cb: Optional[Callable[[], Awaitable[None]]] = None
-        self._weather_cb: Optional[Callable[[], Awaitable[None]]] = None
-        self._system_cb: Optional[Callable[[], Awaitable[None]]] = None
-
-    def set_time_sync_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
-        """连接期间把 push_cts 闭包挂到 handler；断开时传 None 清除。"""
-        self._time_sync_cb = cb
-
-    def set_weather_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
-        """连接期间把 push_weather 闭包挂到 handler；断开时传 None 清除。"""
-        self._weather_cb = cb
-
-    def set_system_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
-        """连接期间把 system publisher 的 push_now 挂到 handler；断开清除。"""
-        self._system_cb = cb
 
     def on_notify(self, _handle: int, data: bytearray) -> None:
         if len(data) != EVENT_SIZE:
@@ -318,30 +302,6 @@ class ControlHandler:
 
         type_, btn_id, action, _r, value, seq = struct.unpack(
             EVENT_STRUCT, bytes(data))
-
-        # ESP → PC 请求事件路由
-        if type_ == EVENT_TYPE_REQUEST:
-            if btn_id == REQUEST_TIME_SYNC:
-                log(f"[req] time_sync seq={seq}")
-                if self._time_sync_cb is not None:
-                    asyncio.create_task(self._time_sync_cb())
-                else:
-                    log("[warn] time_sync 请求到达但未安装回调")
-            elif btn_id == REQUEST_WEATHER:
-                log(f"[req] weather seq={seq}")
-                if self._weather_cb is not None:
-                    asyncio.create_task(self._weather_cb())
-                else:
-                    log("[warn] weather 请求到达但未安装回调")
-            elif btn_id == REQUEST_SYSTEM:
-                log(f"[req] system seq={seq}")
-                if self._system_cb is not None:
-                    asyncio.create_task(self._system_cb())
-                else:
-                    log("[warn] system 请求到达但未安装回调")
-            else:
-                log(f"[warn] 未知 request id={btn_id} seq={seq}")
-            return
 
         if type_ != EVENT_TYPE_BUTTON or action != 0:
             log(f"[info] 忽略 ctrl type={type_} action={action} id={btn_id} seq={seq}")
@@ -367,6 +327,20 @@ class ControlHandler:
             fn()
         except Exception as e:
             log(f"[err] ctrl 动作失败: {e}")
+
+
+def make_request_handler(name: str, action):
+    """把 BLE notify callback 桥接到一个 async action。
+
+    ESP 端每次 subscribe 上升沿或页面进入都会发一帧 1B seq。
+    body[0] 仅做日志观察，不去重（重复触发幂等：push_cts/push_weather 都安全，
+    sys_pub.push_now 自带 asyncio.Lock）。
+    """
+    def handler(_sender, data: bytearray) -> None:
+        seq = data[0] if data else None
+        log(f"[req] {name} seq={seq}")
+        asyncio.create_task(action())
+    return handler
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +736,7 @@ class SystemPublisher:
     - 网速：用 net_io_counters 的字节差 / 时间差换算 KB/s
     - 温度：psutil.sensors_temperatures() 读不到就填哨兵
     - 电池：无电池填 255/255
-    ESP 侧 REQUEST_SYSTEM 触发立即推送一帧（打破 2s 常规节奏）。
+    ESP 侧 system-req notify 触发立即推送一帧（打破 2s 常规节奏）。
     """
 
     def __init__(self, client: BleakClient, loop: asyncio.AbstractEventLoop):
@@ -928,7 +902,7 @@ _weather_location: Optional[tuple[float, float, str]] = None
 
 
 async def push_weather(client: BleakClient) -> None:
-    """响应 ESP 的 REQUEST_WEATHER：拉一次天气写到 weather_char。
+    """响应 ESP 的 weather-req notify：拉一次天气写到 weather_char。
 
     10 分钟内的重复请求直接回缓存数据；IP 定位结果全局保留一次，因为
     桌面机短时间内地理位置不会变。fetch/locate 都是同步 requests，
@@ -976,30 +950,47 @@ async def run_session(ctrl: ControlHandler) -> None:
     async with BleakClient(device) as client:
         loop = asyncio.get_running_loop()
 
-        # 注入反向请求回调：ESP 订阅 control_char 或进入天气页时分别触发
-        ctrl.set_time_sync_cb(lambda: push_cts(client))
-        ctrl.set_weather_cb(lambda: push_weather(client))
-
-        # 1) 订阅控制按钮
+        # 1) 按钮事件（ESP → PC → Windows 动作）
         await client.start_notify(CONTROL_CHAR_UUID, ctrl.on_notify)
         log(f"已订阅 control {CONTROL_CHAR_UUID}")
 
-        # 2) 启动媒体推送
+        # 2) 时间同步请求（ESP 订阅 CTS 的 NOTIFY → PC 立即 push_cts）
+        await client.start_notify(
+            CTS_CHAR_UUID,
+            make_request_handler("time", lambda: push_cts(client)),
+        )
+        log(f"已订阅 time-req {CTS_CHAR_UUID}")
+
+        # 3) 天气请求（进入天气页或订阅时触发）
+        await client.start_notify(
+            WEATHER_REQ_CHAR_UUID,
+            make_request_handler("weather", lambda: push_weather(client)),
+        )
+        log(f"已订阅 weather-req {WEATHER_REQ_CHAR_UUID}")
+
+        # 4) 启动媒体推送
         pub = MediaPublisher(client, loop)
         await pub.start()
 
-        # 3) 启动 Toast 推送（权限被拒等失败不影响媒体/控制）
+        # 5) 启动 Toast 推送（权限被拒等失败不影响媒体/控制）
         toast_pub = ToastPublisher(client, loop)
         try:
             await toast_pub.start()
         except Exception as e:
             log(f"[toast] 启动失败，已跳过: {e}")
 
-        # 4) 启动系统监控推送（psutil 采集失败不影响其他通道）
+        # 6) 启动系统监控推送（psutil 采集失败不影响其他通道）
+        #    sys_pub 起来后再订阅 system-req，确保 handler 拿得到 push_now
         sys_pub = SystemPublisher(client, loop)
+        sys_req_subscribed = False
         try:
             await sys_pub.start()
-            ctrl.set_system_cb(sys_pub.push_now)
+            await client.start_notify(
+                SYSTEM_REQ_CHAR_UUID,
+                make_request_handler("system", sys_pub.push_now),
+            )
+            sys_req_subscribed = True
+            log(f"已订阅 system-req {SYSTEM_REQ_CHAR_UUID}")
         except Exception as e:
             log(f"[system] 启动失败，已跳过: {e}")
 
@@ -1014,13 +1005,16 @@ async def run_session(ctrl: ControlHandler) -> None:
             await sys_pub.stop()
             await toast_pub.stop()
             await pub.stop()
-            try:
-                await client.stop_notify(CONTROL_CHAR_UUID)
-            except Exception:
-                pass
-            ctrl.set_time_sync_cb(None)
-            ctrl.set_weather_cb(None)
-            ctrl.set_system_cb(None)
+            for uuid in (CONTROL_CHAR_UUID, CTS_CHAR_UUID, WEATHER_REQ_CHAR_UUID):
+                try:
+                    await client.stop_notify(uuid)
+                except Exception:
+                    pass
+            if sys_req_subscribed:
+                try:
+                    await client.stop_notify(SYSTEM_REQ_CHAR_UUID)
+                except Exception:
+                    pass
         log("连接断开")
 
 

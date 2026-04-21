@@ -37,15 +37,19 @@
   | 短码 | 角色 | 方向 | payload |
   | ---- | ---- | ---- | ------- |
   | `0x8a5c0001` | weather **service** | — | — |
-  | `0x8a5c0002` | weather **char** | PC → ESP (WRITE) | 68B packed |
+  | `0x8a5c0002` | weather write **char** | PC → ESP (WRITE) | 68B packed |
   | `0x8a5c0003` | notification service | — | — |
   | `0x8a5c0004` | notification char | PC → ESP (WRITE) | 136B packed |
   | `0x8a5c0005` | control service | — | — |
   | `0x8a5c0006` | control char | ESP → PC (NOTIFY) | 8B packed |
   | `0x8a5c0007` | media service | — | — |
   | `0x8a5c0008` | media char | PC → ESP (WRITE) | 92B packed |
+  | `0x8a5c0009` | system **service** | — | — |
+  | `0x8a5c000a` | system write char | PC → ESP (WRITE) | 16B packed |
+  | `0x8a5c000b` | weather **req** char（末尾追加） | ESP → PC (NOTIFY) | 1B seq |
+  | `0x8a5c000c` | system **req** char（末尾追加） | ESP → PC (NOTIFY) | 1B seq |
 
-  （标准 Current Time Service 0x1805 / 0x2A2B 沿用蓝牙 SIG 定义，不纳入本方案）
+  （标准 Current Time Service 0x1805 / 0x2A2B 沿用蓝牙 SIG 定义，不纳入本方案；time 的反向请求复用 0x2A2B 的 NOTIFY flag，不新增 UUID）
 
 优点：
 - 一份 base UUID，跨端代码只维护一套
@@ -91,6 +95,17 @@
 2. 紧接的偶数短码作为主 characteristic
 3. 需要多个 characteristic 的 service，提前预留连续 4 / 8 个短码，避免"同一 service 的 characteristic 散落在不同号段"
 4. 同步更新本 DR 表格 + README 的 BLE 协议表 + 各 `./ble-*-contract.md`
+
+### 例外：已落地 service 事后需要追加 char（v2 反向请求重构）
+
+某 service 初始只分配了一个 char（奇偶对），事后发现需要新增 char（如 ESP→PC 反向请求用的 notify char）。此时有两种权衡：
+
+- **推倒重排**：把该 service 的短码整体迁到一个预留了 4 短码的段，所有已发布的 UUID 都要改。代价极高。
+- **末尾追加**：在整张表的末尾拿下一个可用短码作为附加 char。优点是不动既有 UUID；缺点是"service 内 char 的短码不连号"。
+
+当前项目采用**末尾追加**：`0x000b` 是 weather service 的第二个 char、`0x000c` 是 system service 的第二个 char。文件顶部注释 + 本 DR 表格双重说明归属。
+
+触发该例外的典型场景：业务从"PC 单向推数据"演进到"ESP 也能请 PC 推"，多出 1 个方向的 char，但原 service 的奇偶对已占满。
 
 ## 参考
 

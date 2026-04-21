@@ -12,6 +12,7 @@
 | 通知 | 滚动列表，保存最近 10 条（类别+优先级） | PC → ESP (自定义 0x8a5c0003) |
 | 音乐 | 正在播放曲目 + 艺术家 + 进度条 + 播放状态 | PC → ESP (自定义 0x8a5c0007) |
 | 控制 | 屏上按钮触发 PC 动作（锁屏/静音/上下曲/播放暂停） | ESP → PC (自定义 0x8a5c0005) |
+| 系统 | CPU / 内存 / 磁盘 / 网速 / 温度 / 电池 | PC → ESP (自定义 0x8a5c0009) |
 | 关于 | 版本信息 | — |
 
 ## 硬件配置
@@ -184,11 +185,16 @@ idf.py build   # 重新嵌入
 
 | UUID 片段 | 方向 | 结构 | 字节 |
 |-----------|------|------|------|
-| 0x2A2B (标准 CTS) | PC → ESP | `<HBBBBBBBB` | 10 |
+| 0x2A2B (标准 CTS) | PC → ESP (WRITE) / ESP → PC (NOTIFY) | `<HBBBBBBBB` / 1B seq | 10 / 1 |
 | 8a5c0002 weather | PC → ESP | `<hhhBBI24s32s` | 68 |
 | 8a5c0004 notify | PC → ESP | `<IBB2x32s96s` | 136 |
 | 8a5c0008 media | PC → ESP | `<BBhhHI48s32s` | 92 |
 | 8a5c0006 control | ESP → PC | `<BBBBhH` | 8 (NOTIFY) |
+| 8a5c000a system | PC → ESP | `<BBBBBBhIHH` | 16 |
+| 8a5c000b weather-req | ESP → PC (NOTIFY) | 1B seq | 1 |
+| 8a5c000c system-req | ESP → PC (NOTIFY) | 1B seq | 1 |
+
+反向请求（ESP → PC 请求补推数据）由各业务 service 自管独立 NOTIFY char：订阅上升沿或页面 enter 触发一次 1B seq notify，PC 收到后用同 service 的 WRITE char 回写数据。详见 `.trellis/spec/iot/protocol/esp-to-pc-notify-request-pattern-playbook.md`。
 
 设备广播名：**ESP32-S3-DEMO**。
 

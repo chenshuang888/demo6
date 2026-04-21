@@ -1,6 +1,6 @@
 #include "page_system.h"
 #include "system_manager.h"
-#include "control_service.h"
+#include "system_service.h"
 
 #include "esp_log.h"
 #include "lvgl.h"
@@ -375,7 +375,7 @@ static lv_obj_t *page_system_create(void)
     page_init();
 
     /* 进入页面立刻让 PC 推一帧，不用等 2 秒 tick */
-    control_service_send_request(CONTROL_REQUEST_SYSTEM);
+    system_service_send_request();
 
     return s_ui.screen;
 }

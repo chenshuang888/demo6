@@ -107,10 +107,17 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
                  event->subscribe.conn_handle,
                  event->subscribe.attr_handle,
                  event->subscribe.cur_notify);
-        /* 订阅 control_char 的上升沿会触发 ESP 反向请求 PC 推送当前时间。 */
-        control_service_on_subscribe(event->subscribe.attr_handle,
+        /* 每个 service 自管反向请求：按 attr_handle 匹配自己关心的 char，
+         * 上升沿触发一次 notify 让 PC 主动推送对应数据。 */
+        time_service_on_subscribe(event->subscribe.attr_handle,
+                                  event->subscribe.prev_notify,
+                                  event->subscribe.cur_notify);
+        weather_service_on_subscribe(event->subscribe.attr_handle,
                                      event->subscribe.prev_notify,
                                      event->subscribe.cur_notify);
+        system_service_on_subscribe(event->subscribe.attr_handle,
+                                    event->subscribe.prev_notify,
+                                    event->subscribe.cur_notify);
         break;
 
     case BLE_GAP_EVENT_MTU:
