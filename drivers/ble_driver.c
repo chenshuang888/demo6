@@ -12,6 +12,7 @@
 #include "notify_service.h"
 #include "media_service.h"
 #include "control_service.h"
+#include "system_service.h"
 #include "ble_conn.h"
 
 /* 外部库函数声明 */
@@ -195,6 +196,13 @@ esp_err_t ble_driver_init(void)
     ret = control_service_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize control service, error: %d", ret);
+        return ESP_FAIL;
+    }
+
+    /* 初始化系统监控服务（PC → ESP 推 CPU/MEM/DISK/BAT/NET/Temp） */
+    ret = system_service_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize system service, error: %d", ret);
         return ESP_FAIL;
     }
 

@@ -8,6 +8,7 @@
 #include "weather_manager.h"
 #include "notify_manager.h"
 #include "media_manager.h"
+#include "system_manager.h"
 #include "persist.h"
 #include "settings_store.h"
 
@@ -57,6 +58,9 @@ void app_main(void)
 
     // 初始化媒体管理器（同上；BLE 回调会 push 到它）
     ESP_ERROR_CHECK(media_manager_init());
+
+    // 初始化系统监控管理器（PC 推 CPU/MEM/DISK/BAT/NET/Temp）
+    ESP_ERROR_CHECK(system_manager_init());
 
     // 初始化 BLE
     ESP_ERROR_CHECK(ble_driver_init());

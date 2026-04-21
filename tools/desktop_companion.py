@@ -5,6 +5,10 @@
       id=0 Lock / id=1 Mute / id=2 Prev / id=3 Next / id=4 PlayPause
   - 订阅 Windows 媒体会话 + 写 media_char
       (title / artist / playing / position / duration) → ESP 屏
+  - 轮询 Windows 通知中心 + 写 notify_char
+      (微信 / QQ / Teams 白名单 toast) → ESP 屏
+  - psutil 定时采集系统状态 + 写 system_char
+      (CPU / MEM / DISK / BAT / NET / TEMP / Uptime) → ESP 屏
 
 等价于 control_panel_client.py + media_publisher.py 的功能，合并避免
 两个进程抢 BLE 连接导致的不稳定。
@@ -30,6 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
+import psutil
 import requests
 from bleak import BleakClient, BleakScanner
 
@@ -58,6 +63,7 @@ MEDIA_CHAR_UUID     = "8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → 
 CTS_CHAR_UUID       = "00002a2b-0000-1000-8000-00805f9b34fb"   # Write  (PC → ESP, 时间同步)
 WEATHER_CHAR_UUID   = "8a5c0002-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 天气推送)
 NOTIFY_CHAR_UUID    = "8a5c0004-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 通知推送)
+SYSTEM_CHAR_UUID    = "8a5c000a-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 系统监控)
 
 # control_event_t: type u8, id u8, action u8, _r u8, value i16, seq u16  → 8 B
 EVENT_STRUCT = "<BBBBhH"
@@ -70,6 +76,7 @@ EVENT_TYPE_REQUEST = 2
 # REQUEST 事件的 id 语义
 REQUEST_TIME_SYNC  = 0
 REQUEST_WEATHER    = 1
+REQUEST_SYSTEM     = 2
 
 # CTS (Current Time Service) 结构：与 services/time_service.c 的 ble_cts_current_time_t 对齐
 # year u16, month u8, day u8, hour u8, minute u8, second u8,
@@ -107,6 +114,18 @@ NOTIFY_CAT_NEWS     = 6
 NOTIFY_CAT_ALERT    = 7
 
 NOTIFY_PRIO_NORMAL  = 1
+
+# system_payload_t: cpu u8, mem u8, disk u8, bat u8, charging u8, _r u8,
+#                   cpu_temp_cx10 i16, uptime_sec u32, net_down_kbps u16,
+#                   net_up_kbps u16  → 16 B（严格对齐 services/system_manager.h）
+SYSTEM_STRUCT = "<BBBBBBhIHH"
+SYSTEM_SIZE   = struct.calcsize(SYSTEM_STRUCT)
+
+# 系统监控常量
+SYSTEM_PUSH_INTERVAL_S   = 2.0
+SYSTEM_BATTERY_ABSENT    = 255
+SYSTEM_CHARGING_ABSENT   = 255
+SYSTEM_CPU_TEMP_INVALID  = -32768
 
 # Windows Toast 白名单：DisplayName（中英文兼容）→ (category, 标准化 app 名)
 # 标准化名供日志辨识；category 决定 ESP 屏上图标和颜色
@@ -278,6 +297,7 @@ class ControlHandler:
         # ESP 反向请求 PC 推送时间/天气的回调，由 run_session 在连接建立后注入
         self._time_sync_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._weather_cb: Optional[Callable[[], Awaitable[None]]] = None
+        self._system_cb: Optional[Callable[[], Awaitable[None]]] = None
 
     def set_time_sync_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
         """连接期间把 push_cts 闭包挂到 handler；断开时传 None 清除。"""
@@ -286,6 +306,10 @@ class ControlHandler:
     def set_weather_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
         """连接期间把 push_weather 闭包挂到 handler；断开时传 None 清除。"""
         self._weather_cb = cb
+
+    def set_system_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
+        """连接期间把 system publisher 的 push_now 挂到 handler；断开清除。"""
+        self._system_cb = cb
 
     def on_notify(self, _handle: int, data: bytearray) -> None:
         if len(data) != EVENT_SIZE:
@@ -309,6 +333,12 @@ class ControlHandler:
                     asyncio.create_task(self._weather_cb())
                 else:
                     log("[warn] weather 请求到达但未安装回调")
+            elif btn_id == REQUEST_SYSTEM:
+                log(f"[req] system seq={seq}")
+                if self._system_cb is not None:
+                    asyncio.create_task(self._system_cb())
+                else:
+                    log("[warn] system 请求到达但未安装回调")
             else:
                 log(f"[warn] 未知 request id={btn_id} seq={seq}")
             return
@@ -693,6 +723,180 @@ class ToastPublisher:
 
 
 # ---------------------------------------------------------------------------
+# System publisher（psutil 采集 CPU/MEM/DISK/BAT/NET/温度 → 写 system_char）
+# ---------------------------------------------------------------------------
+
+def _read_cpu_temp_cx10() -> int:
+    """Windows 上 psutil.sensors_temperatures 多数虚拟机/家用机读不到，
+    读不到就返回 SYSTEM_CPU_TEMP_INVALID 让 ESP 端显示 "--"。"""
+    getter = getattr(psutil, "sensors_temperatures", None)
+    if getter is None:
+        return SYSTEM_CPU_TEMP_INVALID
+    try:
+        temps = getter()
+    except Exception:
+        return SYSTEM_CPU_TEMP_INVALID
+    if not temps:
+        return SYSTEM_CPU_TEMP_INVALID
+
+    # 优先找常见 CPU 芯片组；否则取任意第一个传感器
+    for key in ("coretemp", "cpu_thermal", "k10temp", "acpitz"):
+        entries = temps.get(key)
+        if entries:
+            cur = entries[0].current
+            if cur is not None:
+                return max(-32767, min(32767, int(round(float(cur) * 10))))
+    for entries in temps.values():
+        if entries:
+            cur = entries[0].current
+            if cur is not None:
+                return max(-32767, min(32767, int(round(float(cur) * 10))))
+    return SYSTEM_CPU_TEMP_INVALID
+
+
+class SystemPublisher:
+    """每 SYSTEM_PUSH_INTERVAL_S 秒采集一次 PC 系统状态并 write 到 ESP。
+
+    - CPU%：用 cpu_percent(interval=None)，相对上次调用的差值（首帧 0）
+    - 磁盘：只看 C 盘 fixed，避免 disk_partitions() 遍历慢
+    - 网速：用 net_io_counters 的字节差 / 时间差换算 KB/s
+    - 温度：psutil.sensors_temperatures() 读不到就填哨兵
+    - 电池：无电池填 255/255
+    ESP 侧 REQUEST_SYSTEM 触发立即推送一帧（打破 2s 常规节奏）。
+    """
+
+    def __init__(self, client: BleakClient, loop: asyncio.AbstractEventLoop):
+        self._client = client
+        self._loop = loop
+        self._push_lock = asyncio.Lock()
+        self._loop_task: asyncio.Task | None = None
+        self._running = False
+
+        # 网速差分基准；首帧无法算速率，填 0
+        self._last_net_ts: float | None = None
+        self._last_net_recv: int = 0
+        self._last_net_sent: int = 0
+
+        # 预热 cpu_percent，第一次调用会返回 0.0 但会记录采样点
+        try:
+            psutil.cpu_percent(interval=None)
+        except Exception:
+            pass
+
+    async def start(self) -> None:
+        self._running = True
+        self._loop_task = asyncio.create_task(self._run_loop())
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._loop_task is not None:
+            self._loop_task.cancel()
+            try:
+                await self._loop_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._loop_task = None
+
+    async def _run_loop(self) -> None:
+        # 首帧等一个间隔让 cpu_percent 有采样窗，以免第一次推送全 0
+        try:
+            await asyncio.sleep(SYSTEM_PUSH_INTERVAL_S)
+        except asyncio.CancelledError:
+            return
+        while self._running:
+            try:
+                await self.push_now()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log(f"[system] 循环异常: {e}")
+            try:
+                await asyncio.sleep(SYSTEM_PUSH_INTERVAL_S)
+            except asyncio.CancelledError:
+                raise
+
+    def _sample(self) -> bytes:
+        cpu_pct  = int(round(psutil.cpu_percent(interval=None)))
+        mem_pct  = int(round(psutil.virtual_memory().percent))
+
+        try:
+            disk_pct = int(round(psutil.disk_usage("C:\\").percent))
+        except Exception:
+            disk_pct = 0
+
+        bat_pct    = SYSTEM_BATTERY_ABSENT
+        charging   = SYSTEM_CHARGING_ABSENT
+        try:
+            bat = psutil.sensors_battery()
+        except Exception:
+            bat = None
+        if bat is not None:
+            bat_pct  = max(0, min(100, int(round(bat.percent))))
+            charging = 1 if bat.power_plugged else 0
+
+        cpu_temp = _read_cpu_temp_cx10()
+
+        try:
+            uptime = int(_time.time() - psutil.boot_time())
+        except Exception:
+            uptime = 0
+        uptime = max(0, min(0xFFFFFFFF, uptime))
+
+        # 网速：差分字节 / 差分秒 → KB/s
+        down_kbps = 0
+        up_kbps   = 0
+        try:
+            io = psutil.net_io_counters()
+            now = _time.time()
+            if self._last_net_ts is not None:
+                dt = now - self._last_net_ts
+                if dt > 0.1:
+                    d_recv = max(0, io.bytes_recv - self._last_net_recv)
+                    d_sent = max(0, io.bytes_sent - self._last_net_sent)
+                    down_kbps = min(0xFFFF, int(d_recv / dt / 1024))
+                    up_kbps   = min(0xFFFF, int(d_sent / dt / 1024))
+            self._last_net_ts = now
+            self._last_net_recv = io.bytes_recv
+            self._last_net_sent = io.bytes_sent
+        except Exception:
+            pass
+
+        return struct.pack(
+            SYSTEM_STRUCT,
+            max(0, min(100, cpu_pct)),
+            max(0, min(100, mem_pct)),
+            max(0, min(100, disk_pct)),
+            bat_pct, charging, 0,
+            cpu_temp,
+            uptime,
+            down_kbps, up_kbps,
+        )
+
+    async def push_now(self) -> None:
+        async with self._push_lock:
+            try:
+                data = await self._loop.run_in_executor(None, self._sample)
+            except Exception as e:
+                log(f"[system] 采集失败: {e}")
+                return
+            try:
+                await self._client.write_gatt_char(
+                    SYSTEM_CHAR_UUID, data, response=True)
+            except Exception as e:
+                log(f"[system] 推送失败: {e}")
+                return
+
+            cpu, mem, disk, bat, chg, _, temp, up, dn, upk = struct.unpack(
+                SYSTEM_STRUCT, data)
+            bat_str  = "--" if bat == SYSTEM_BATTERY_ABSENT else f"{bat}%"
+            chg_str  = "" if chg == SYSTEM_CHARGING_ABSENT else ("⚡" if chg else "")
+            temp_str = "--" if temp == SYSTEM_CPU_TEMP_INVALID else f"{temp/10:.1f}°C"
+            log(f"[system] CPU={cpu}% MEM={mem}% DISK={disk}% "
+                f"BAT={bat_str}{chg_str} TEMP={temp_str} "
+                f"UP={up}s ↓{dn}KB/s ↑{upk}KB/s")
+
+
+# ---------------------------------------------------------------------------
 # 会话生命周期（一个 BleakClient 同时承载 notify + write）
 # ---------------------------------------------------------------------------
 
@@ -791,6 +995,14 @@ async def run_session(ctrl: ControlHandler) -> None:
         except Exception as e:
             log(f"[toast] 启动失败，已跳过: {e}")
 
+        # 4) 启动系统监控推送（psutil 采集失败不影响其他通道）
+        sys_pub = SystemPublisher(client, loop)
+        try:
+            await sys_pub.start()
+            ctrl.set_system_cb(sys_pub.push_now)
+        except Exception as e:
+            log(f"[system] 启动失败，已跳过: {e}")
+
         log("已就绪\n")
 
         try:
@@ -799,6 +1011,7 @@ async def run_session(ctrl: ControlHandler) -> None:
                 # 兜底：每 10s 全量同步一次媒体状态，防 winsdk 事件遗漏
                 await pub.push_now()
         finally:
+            await sys_pub.stop()
             await toast_pub.stop()
             await pub.stop()
             try:
@@ -807,6 +1020,7 @@ async def run_session(ctrl: ControlHandler) -> None:
                 pass
             ctrl.set_time_sync_cb(None)
             ctrl.set_weather_cb(None)
+            ctrl.set_system_cb(None)
         log("连接断开")
 
 

@@ -9,6 +9,8 @@ idf_component_register(
         "media_manager.c"
         "media_service.c"
         "control_service.c"
+        "system_manager.c"
+        "system_service.c"
         "ble_conn.c"
         "persist.c"
         "settings_store.c"

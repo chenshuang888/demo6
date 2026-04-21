@@ -10,6 +10,7 @@ idf_component_register(
         "pages/page_notifications.c"
         "pages/page_control.c"
         "pages/page_music.c"
+        "pages/page_system.c"
     INCLUDE_DIRS
         "."
     EMBED_FILES
