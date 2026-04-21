@@ -35,7 +35,6 @@ typedef enum {
     PAGE_ABOUT,          // 关于页面
     PAGE_WEATHER,        // 天气页面
     PAGE_NOTIFICATIONS,  // 通知页面
-    PAGE_CONTROL,        // 控制面板页面（BLE 触摸按钮 → PC）
     PAGE_MUSIC,          // 音乐副屏页面（曲目显示 + 播放控制）
     PAGE_TIME_ADJUST,    // 时间/日期调节页面（从菜单进入）
     PAGE_SYSTEM,         // PC 系统监控页面（CPU/MEM/DISK/BAT/NET/Temp）

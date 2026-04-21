@@ -55,11 +55,16 @@
 
 ---
 
-## UUID 约定（对话中的实现草案）
+## UUID 约定
 
 - Service UUID：`8a5c0007-0000-4aef-b87e-4fa1e0c7e0f6`
-- Characteristic UUID：`8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6`
-  - 属性：WRITE（PC → ESP32 推送）
+- Characteristic（媒体元数据）：`8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6`
+  - 属性：WRITE（PC → ESP32 推送 92B media_payload，本文档主体）
+- Characteristic（媒体键按钮，末尾追加 2026-04-21）：`8a5c000d-0000-4aef-b87e-4fa1e0c7e0f6`
+  - 属性：READ + NOTIFY（ESP → PC 推送 4B `media_button_event_t`：`id u8 / action u8 / seq u16`）
+  - id 语义：0=Prev / 1=PlayPause / 2=Next
+  - 触发时机：page_music 的上下首/播暂按钮点击
+  - 历史：此前由已退役的 `control_service`（`0x8a5c0005/0006`）承担，2026-04-21 按"触发端与响应端同 service"原则迁入 media 自管
 
 ---
 

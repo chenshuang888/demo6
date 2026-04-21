@@ -11,7 +11,6 @@
 #include "weather_service.h"
 #include "notify_service.h"
 #include "media_service.h"
-#include "control_service.h"
 #include "system_service.h"
 #include "ble_conn.h"
 
@@ -196,13 +195,6 @@ esp_err_t ble_driver_init(void)
     ret = media_service_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize media service, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 初始化控制服务（ESP → PC 主动事件上报） */
-    ret = control_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize control service, error: %d", ret);
         return ESP_FAIL;
     }
 

@@ -2,7 +2,7 @@
 
 ## 背景
 
-项目需要 5 个自定义 BLE GATT 服务：weather / notification / control / media（外加 ESP 侧一个标准 CTS）。每个 service 要有 128-bit UUID，每个 characteristic 也要有独立 UUID，且：
+项目需要若干自定义 BLE GATT 服务：weather / notification / media / system（外加 ESP 侧一个标准 CTS）。每个 service 要有 128-bit UUID，每个 characteristic 也要有独立 UUID，且：
 
 - 要能从 UUID 一眼看出"哪个 service"、"哪个 characteristic"
 - 未来可能加服务或 characteristic，UUID 分配要可扩展
@@ -10,6 +10,8 @@
 - 跨端（ESP C / Python bleak）必须语义一致
 
 同时考虑 BLE base UUID 的惯例：把 16-bit 短码嵌在 128-bit base UUID 里（类似 Nordic / Dialog 的 vendor 做法）。
+
+> 注：原先还有一个 `control_service`（短码 `0x8a5c0005/0006`）用于"屏上按钮 → PC 系统动作"。该 service 于 2026-04-21 退役，短码永久保留 RETIRED，不再复用（见下方表格和"退役 UUID"一节）。
 
 ## 选项对比
 
@@ -40,14 +42,15 @@
   | `0x8a5c0002` | weather write **char** | PC → ESP (WRITE) | 68B packed |
   | `0x8a5c0003` | notification service | — | — |
   | `0x8a5c0004` | notification char | PC → ESP (WRITE) | 136B packed |
-  | `0x8a5c0005` | control service | — | — |
-  | `0x8a5c0006` | control char | ESP → PC (NOTIFY) | 8B packed |
+  | `0x8a5c0005` | ~~control service~~ **RETIRED** (2026-04-21) | — | — |
+  | `0x8a5c0006` | ~~control char~~ **RETIRED** (2026-04-21) | — | — |
   | `0x8a5c0007` | media service | — | — |
-  | `0x8a5c0008` | media char | PC → ESP (WRITE) | 92B packed |
+  | `0x8a5c0008` | media write char | PC → ESP (WRITE) | 92B packed |
   | `0x8a5c0009` | system **service** | — | — |
   | `0x8a5c000a` | system write char | PC → ESP (WRITE) | 16B packed |
   | `0x8a5c000b` | weather **req** char（末尾追加） | ESP → PC (NOTIFY) | 1B seq |
   | `0x8a5c000c` | system **req** char（末尾追加） | ESP → PC (NOTIFY) | 1B seq |
+  | `0x8a5c000d` | media **button** char（末尾追加） | ESP → PC (NOTIFY) | 4B packed (id/action/seq) |
 
   （标准 Current Time Service 0x1805 / 0x2A2B 沿用蓝牙 SIG 定义，不纳入本方案；time 的反向请求复用 0x2A2B 的 NOTIFY flag，不新增 UUID）
 
@@ -77,10 +80,10 @@
 
 - **选择理由**：跨端一致性高 + 视觉可读性强 + 扩展简单
 - **证据**：
-  - `services/control_service.c:12-21`：control service + characteristic UUID 宏
   - `services/weather_service.c`：weather service + characteristic UUID 宏
   - `services/notify_service.c`：notification service + characteristic UUID 宏
-  - `services/media_service.c`：media service + characteristic UUID 宏
+  - `services/media_service.c`：media service + characteristic UUID 宏（含 WRITE `0x0008` 与末尾追加的 media-button NOTIFY `0x000d`）
+  - `services/system_service.c`：system service + 末尾追加的 system-req NOTIFY `0x000c`
   - README.md "BLE 协议约定" 节表格
 - **边界（什么情况换方案）**：
   1. 项目要对外发布 BLE 设备并通过蓝牙 SIG 认证：可能需要申请正式 vendor ID
@@ -103,12 +106,20 @@
 - **推倒重排**：把该 service 的短码整体迁到一个预留了 4 短码的段，所有已发布的 UUID 都要改。代价极高。
 - **末尾追加**：在整张表的末尾拿下一个可用短码作为附加 char。优点是不动既有 UUID；缺点是"service 内 char 的短码不连号"。
 
-当前项目采用**末尾追加**：`0x000b` 是 weather service 的第二个 char、`0x000c` 是 system service 的第二个 char。文件顶部注释 + 本 DR 表格双重说明归属。
+当前项目采用**末尾追加**：`0x000b` 是 weather service 的第二个 char、`0x000c` 是 system service 的第二个 char、`0x000d` 是 media service 的第二个 char（按钮事件 NOTIFY）。文件顶部注释 + 本 DR 表格双重说明归属。
 
-触发该例外的典型场景：业务从"PC 单向推数据"演进到"ESP 也能请 PC 推"，多出 1 个方向的 char，但原 service 的奇偶对已占满。
+触发该例外的典型场景：业务从"PC 单向推数据"演进到"ESP 也能请 PC 推"或"ESP 向 PC 发按钮事件"，多出 1 个方向的 char，但原 service 的奇偶对已占满。
+
+### 退役 UUID（RETIRED，永不复用）
+
+| 短码 | 原角色 | 退役日期 | 原因 |
+|---|---|---|---|
+| `0x8a5c0005` | control service | 2026-04-21 | 锁屏/静音功能放弃，媒体键迁至 media service |
+| `0x8a5c0006` | control char | 2026-04-21 | 同上 |
+
+**规则**：RETIRED 短码在表格中保留不删除（便于审计 + 防"下一个开发者看见空位随手用上撞老固件"）。新 service 分配一律跳过这些短码，从当前未使用的最大号 + 1 继续。
 
 ## 参考
 
-- `services/control_service.c:12-21`：本方案实际实现
+- `./ble-weather-service-payload-contract.md`、`./ble-notification-service-payload-contract.md`、`./ble-media-service-payload-contract.md`、`./ble-cts-current-time-binary-contract.md`：每个 service 的 payload 契约
 - `README.md` "BLE 协议约定" 节
-- `./ble-weather-service-payload-contract.md`、`./ble-notification-service-payload-contract.md`、`./ble-control-service-event-contract.md`、`./ble-media-service-payload-contract.md`、`./ble-cts-current-time-binary-contract.md`：每个 service 的 payload 契约

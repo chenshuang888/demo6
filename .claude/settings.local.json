@@ -19,7 +19,10 @@
       "WebFetch(domain:github.com)",
       "Bash(curl -s \"https://api.github.com/repos/notofonts/noto-cjk/contents/Sans\")",
       "Bash(curl -sLI -o /dev/null -w \"HTTP %{http_code}  size=%{size_download}\\\\n\" \"https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf\")",
-      "Bash(curl -sL -o NotoSansSC-Regular.ttf \"https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf\")"
+      "Bash(curl -sL -o NotoSansSC-Regular.ttf \"https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf\")",
+      "Bash(mkdir -p .trellis/spec/_archived_unrelated/2026-04-21/protocol .trellis/spec/_archived_unrelated/2026-04-21/guides)",
+      "Bash(mv .trellis/spec/iot/protocol/ble-control-service-event-contract.md .trellis/spec/_archived_unrelated/2026-04-21/protocol/)",
+      "Bash(mv .trellis/spec/iot/guides/ble-service-boundary-control-vs-media-decision-record.md .trellis/spec/_archived_unrelated/2026-04-21/guides/)"
     ]
   }
 }

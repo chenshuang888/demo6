@@ -1,6 +1,6 @@
 # Playbook：用 `ble_conn` 共享连接状态，避免 `services` 反向依赖 `drivers`（组件循环依赖）
 
-> 来源：对话蒸馏（`C--Users-ChenShuang-Desktop-esp32-demo6.md`）中“control_service 要发 notify，但 `services` 不能 include `ble_driver.h`，否则 drivers↔services 组件循环依赖”的真实落地方案。
+> 来源：对话蒸馏（`C--Users-ChenShuang-Desktop-esp32-demo6.md`）中“某个 service 要主动发 notify（最初发生在已退役的 control_service，现代表场景是 weather/system/media 的反向请求 char），但 `services` 不能 include `ble_driver.h`，否则 drivers↔services 组件循环依赖”的真实落地方案。
 >
 > 目标：为“ESP32 侧主动 Notify”提供一个可复用的连接状态获取路径，同时保持 ESP-IDF 组件依赖单向、可扩展。
 
@@ -64,7 +64,7 @@
 - Write/Read（PC → ESP）是“被动应答”，回调签名里 NimBLE 会把 `conn_handle` 作为入参“白送”。
 - Notify（ESP → PC）是“主动发起”，API 必须显式传 `conn_handle`，协议栈无法猜你要发给哪个连接。
 
-因此 `control_service`（或未来任何主动推送的 service）都需要一个可靠的“当前连接句柄”来源。
+因此任何主动推送的 service（weather/system 的反向请求 char、media 的按钮 NOTIFY，以及历史上已退役的 control_service）都需要一个可靠的“当前连接句柄”来源。
 
 ---
 
@@ -74,7 +74,7 @@
 
 - `drivers` 组件 `REQUIRES services`（因为 `ble_driver.c` 里会调用 `weather_service_init()` 等）
 
-如果让 `services/control_service.c` 反过来 `#include "ble_driver.h"` 取 `conn_handle`，就会形成：
+如果让 `services/weather_service.c`（或任何 service）反过来 `#include "ble_driver.h"` 取 `conn_handle`，就会形成：
 
 - `drivers → services`
 - `services → drivers`

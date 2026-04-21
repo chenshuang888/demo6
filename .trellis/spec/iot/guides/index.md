@@ -27,4 +27,3 @@
 - `./driver-folder-semantics-contract.md`：`driver/` 目录语义边界（什么能进 driver，什么不该进）。
 - `./codebase-to-readme-evidence-driven-playbook.md`：从代码库证据驱动地写 README（入口证据→主线→模块职责→可执行验证，避免编造）。
 - `./readme-architecture-card-checklist.md`：README 架构卡片清单（IoT/嵌入式优先，30 秒读懂链路与约束）。
-- `./ble-service-boundary-control-vs-media-decision-record.md`：决策记录：`control_service` 与 `media_service` 是否合并（语义边界与折中方案）。

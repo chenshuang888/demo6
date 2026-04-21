@@ -8,7 +8,6 @@ idf_component_register(
         "notify_service.c"
         "media_manager.c"
         "media_service.c"
-        "control_service.c"
         "system_manager.c"
         "system_service.c"
         "ble_conn.c"

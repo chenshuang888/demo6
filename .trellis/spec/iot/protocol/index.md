@@ -11,8 +11,7 @@
 - `./ble-cts-current-time-binary-contract.md`：BLE CTS（0x1805/0x2A2B）当前时间特征的 10 字节 packed 二进制契约（PC/ESP32 对齐）。
 - `./ble-weather-service-payload-contract.md`：自定义 BLE Weather Service（UUID + 68 字节 packed payload + Python `struct.pack` 对齐）。
 - `./ble-notification-service-payload-contract.md`：自定义 BLE Notification Service（WRITE + 136 字节 packed payload + category/priority）。
-- `./ble-control-service-event-contract.md`：自定义 BLE Control Service（NOTIFY + 8 字节 control_event + seq 去重）。
-- `./ble-media-service-payload-contract.md`：自定义 BLE Media Service（WRITE + 92 字节 media_payload + 设备端本地插值进度条）。
+- `./ble-media-service-payload-contract.md`：自定义 BLE Media Service（WRITE + 92 字节 media_payload + 设备端本地插值进度条；另含 4 字节媒体键 NOTIFY char 0x8a5c000d）。
 
 ### 跨 Service 模式与分配规则（本项目专属）
 

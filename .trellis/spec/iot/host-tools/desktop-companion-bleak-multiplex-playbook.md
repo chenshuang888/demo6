@@ -1,6 +1,6 @@
 # Playbook：`desktop_companion.py`（一个 BleakClient 同时“订阅 control + 推送 media”）
 
-> 来源：对话蒸馏（`C--Users-ChenShuang-Desktop-esp32-demo6.md`）中“control_panel_client + media_publisher 两脚本无法稳定同时连接同一台 ESP32”的真实问题与最终收敛：合并为 `desktop_companion.py`，在同一个连接里完成双向闭环。
+> 来源：对话蒸馏（`C--Users-ChenShuang-Desktop-esp32-demo6.md`）中“早期的 control_panel_client + media_publisher 两脚本无法稳定同时连接同一台 ESP32”的真实问题与最终收敛：合并为 `desktop_companion.py`，在同一个连接里完成双向闭环。control_panel_client.py 在 2026-04-21 随 control_service 一起退役。
 >
 > 目标：把 PC 端工具做到“一个脚本就够用”，并且具备可控的联调模式（`--dry-run`）、自动重连与可观测日志。
 
@@ -59,7 +59,7 @@
 
 ## 典型症状（对话中的现场）
 
-- `control_panel_client.py` 单独运行 OK
+- （已退役）`control_panel_client.py` 单独运行 OK — 随 control_service 下线已删除
 - `media_publisher.py` 单独运行 OK
 - 两个一起跑：扫描/连接/订阅会互相打架（或表现为不稳定/间歇失效）
 
@@ -94,7 +94,7 @@
 
 最小目标是三件事同时跑：
 
-1) 订阅 `control_service` 的 NOTIFY characteristic（接收按钮事件）
+1) 订阅各业务 service 的 NOTIFY characteristic（CTS / weather-req / system-req / media-button 等，接收请求信号或按钮事件）
 2) 监听 Windows 媒体会话变化（SMTC），变化时推 `media_payload`
 3) 自动重连 + 周期兜底推送（例如每 10 秒一次）
 

@@ -3,7 +3,7 @@
 #include "lvgl.h"
 #include "app_fonts.h"
 #include "media_manager.h"
-#include "control_service.h"
+#include "media_service.h"
 #include "ble_conn.h"
 #include <stdio.h>
 #include <string.h>
@@ -24,12 +24,8 @@
 static const char *TAG = "page_music";
 
 /* ============================================================================
- * control_service 按钮 id 语义（与 PC 端 control_panel_client.py 对齐）
+ * 媒体键 id（直接复用 media_service.h 的 MEDIA_BTN_* 宏，不再本地别名）
  * ========================================================================= */
-
-#define CTRL_ID_PREV        2
-#define CTRL_ID_NEXT        3
-#define CTRL_ID_PLAY_PAUSE  4
 
 /* ============================================================================
  * UI 元素
@@ -202,9 +198,9 @@ static void create_control_buttons(void)
     s_ui.pp_btn   = create_ctrl_btn(LV_SYMBOL_PLAY, &s_ui.pp_icon, 0);
     s_ui.next_btn = create_ctrl_btn(LV_SYMBOL_NEXT, NULL, 80);
 
-    lv_obj_set_user_data(s_ui.prev_btn, (void *)(uintptr_t)CTRL_ID_PREV);
-    lv_obj_set_user_data(s_ui.pp_btn,   (void *)(uintptr_t)CTRL_ID_PLAY_PAUSE);
-    lv_obj_set_user_data(s_ui.next_btn, (void *)(uintptr_t)CTRL_ID_NEXT);
+    lv_obj_set_user_data(s_ui.prev_btn, (void *)(uintptr_t)MEDIA_BTN_PREV);
+    lv_obj_set_user_data(s_ui.pp_btn,   (void *)(uintptr_t)MEDIA_BTN_PLAY_PAUSE);
+    lv_obj_set_user_data(s_ui.next_btn, (void *)(uintptr_t)MEDIA_BTN_NEXT);
 }
 
 /* ============================================================================
@@ -302,11 +298,11 @@ static void on_ctrl_btn_clicked(lv_event_t *e)
     lv_obj_t *btn = lv_event_get_target(e);
     uint8_t id = (uint8_t)(uintptr_t)lv_obj_get_user_data(btn);
 
-    esp_err_t r = control_service_send_button(id);
+    esp_err_t r = media_service_send_button(id);
     if (r == ESP_OK) {
-        ESP_LOGI(TAG, "ctrl button sent: id=%u", id);
+        ESP_LOGI(TAG, "media button sent: id=%u", id);
     } else {
-        ESP_LOGW(TAG, "ctrl button send failed: id=%u err=0x%x", id, r);
+        ESP_LOGW(TAG, "media button send failed: id=%u err=0x%x", id, r);
     }
 }
 

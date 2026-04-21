@@ -8,7 +8,6 @@ idf_component_register(
         "pages/page_about.c"
         "pages/page_weather.c"
         "pages/page_notifications.c"
-        "pages/page_control.c"
         "pages/page_music.c"
         "pages/page_system.c"
     INCLUDE_DIRS

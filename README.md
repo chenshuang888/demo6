@@ -10,8 +10,7 @@
 | 菜单 | 页面导航、背光亮度设置、BLE 状态 | — |
 | 天气 | 当前温度/最高最低/湿度/描述/城市 | PC → ESP (自定义 0x8a5c0001) |
 | 通知 | 滚动列表，保存最近 10 条（类别+优先级） | PC → ESP (自定义 0x8a5c0003) |
-| 音乐 | 正在播放曲目 + 艺术家 + 进度条 + 播放状态 | PC → ESP (自定义 0x8a5c0007) |
-| 控制 | 屏上按钮触发 PC 动作（锁屏/静音/上下曲/播放暂停） | ESP → PC (自定义 0x8a5c0005) |
+| 音乐 | 正在播放曲目 + 艺术家 + 进度条 + 播放状态；屏上按上/下/播暂键触发 PC 媒体键 | PC → ESP (0x8a5c0007 WRITE) / ESP → PC (0x8a5c000d NOTIFY) |
 | 系统 | CPU / 内存 / 磁盘 / 网速 / 温度 / 电池 | PC → ESP (自定义 0x8a5c0009) |
 | 关于 | 版本信息 | — |
 
@@ -65,12 +64,11 @@ demo6/
 │   ├── time_service/manager       # Current Time Service
 │   ├── weather_service/manager    # 天气推送
 │   ├── notify_service/manager     # 通知推送（10 条环形缓冲 + 落盘）
-│   ├── media_service/manager      # 正在播放（带 esp_timer 进度插值）
-│   └── control_service            # ESP → PC 按钮事件（NOTIFY）
+│   ├── media_service/manager      # 正在播放（带 esp_timer 进度插值）+ 媒体键 NOTIFY
+│   └── system_service/manager     # PC 系统状态推送 + 反向请求 char
 ├── tools/                    # PC 端 Python 伴侣
-│   ├── desktop_companion.py    # 音乐 + 控制合并版（winsdk）
+│   ├── desktop_companion.py    # BLE 多通道服务端（winsdk + psutil）
 │   ├── ble_time_sync.py        # 时间/天气/通知 GUI（CustomTkinter）
-│   ├── control_panel_client.py # 仅控制面板
 │   ├── media_publisher.py      # 仅音乐推送
 │   ├── gen_font_subset.py      # TTF 子集生成
 │   └── requirements.txt
@@ -189,12 +187,14 @@ idf.py build   # 重新嵌入
 | 8a5c0002 weather | PC → ESP | `<hhhBBI24s32s` | 68 |
 | 8a5c0004 notify | PC → ESP | `<IBB2x32s96s` | 136 |
 | 8a5c0008 media | PC → ESP | `<BBhhHI48s32s` | 92 |
-| 8a5c0006 control | ESP → PC | `<BBBBhH` | 8 (NOTIFY) |
 | 8a5c000a system | PC → ESP | `<BBBBBBhIHH` | 16 |
 | 8a5c000b weather-req | ESP → PC (NOTIFY) | 1B seq | 1 |
 | 8a5c000c system-req | ESP → PC (NOTIFY) | 1B seq | 1 |
+| 8a5c000d media-btn | ESP → PC (NOTIFY) | `<BBH` (id/action/seq) | 4 |
 
-反向请求（ESP → PC 请求补推数据）由各业务 service 自管独立 NOTIFY char：订阅上升沿或页面 enter 触发一次 1B seq notify，PC 收到后用同 service 的 WRITE char 回写数据。详见 `.trellis/spec/iot/protocol/esp-to-pc-notify-request-pattern-playbook.md`。
+反向请求（ESP → PC 请求补推数据）由各业务 service 自管独立 NOTIFY char：订阅上升沿或页面 enter 触发一次 1B seq notify，PC 收到后用同 service 的 WRITE char 回写数据。media-btn 承担"屏上按钮 → PC 媒体键"单向事件（id=0 Prev / 1 PlayPause / 2 Next）。详见 `.trellis/spec/iot/protocol/esp-to-pc-notify-request-pattern-playbook.md`。
+
+> 历史：原 `0x8a5c0005/0006` control service（含 Lock/Mute/Prev/Next/PlayPause 5 个按钮）于 2026-04-21 退役，短码 RETIRED 不再复用。media-btn 按"触发端与响应端同 service"原则拆回 media_service。
 
 设备广播名：**ESP32-S3-DEMO**。
 
@@ -236,6 +236,8 @@ idf.py -p COM3 erase-flash
 ## 版本历史
 
 - **v0.6 (2026-04-20)** — TTF 运行时渲染中文，取代 LVGL CJK 内置字库
+- **v0.7** — Control service 退役：lock/mute 放弃，媒体键（prev/pp/next）迁入 media_service 自管的 NOTIFY char `0x8a5c000d`
+- **v0.6** — System service（CPU/MEM/DISK/BAT/NET/TEMP）+ 反向请求拆回各业务 service
 - **v0.5** — Media service（正在播放副屏）、Control service（反向按钮事件）、desktop_companion 合并客户端
 - **v0.4** — NVS 持久化：背光、系统时间、通知环形缓冲
 - **v0.3** — Notification service + 通知页面，UI 布局/逻辑分离

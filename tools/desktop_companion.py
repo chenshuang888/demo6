@@ -1,24 +1,22 @@
-"""ESP32 桌面伴侣 —— 音乐副屏 + 控制面板合并版。
+"""ESP32 桌面伴侣 —— BLE 多通道服务端。
 
 单一进程连接 ESP32 BLE，在同一 BleakClient 上同时：
-  - 订阅 control_char notify（屏上按钮 → Windows 动作）
-      id=0 Lock / id=1 Mute / id=2 Prev / id=3 Next / id=4 PlayPause
+  - 订阅 media_button_char notify（屏上音乐页按钮 → Windows 媒体键）
+      id=0 Prev / id=1 PlayPause / id=2 Next
   - 订阅 Windows 媒体会话 + 写 media_char
       (title / artist / playing / position / duration) → ESP 屏
   - 轮询 Windows 通知中心 + 写 notify_char
       (微信 / QQ / Teams 白名单 toast) → ESP 屏
   - psutil 定时采集系统状态 + 写 system_char
       (CPU / MEM / DISK / BAT / NET / TEMP / Uptime) → ESP 屏
-
-等价于 control_panel_client.py + media_publisher.py 的功能，合并避免
-两个进程抢 BLE 连接导致的不稳定。
+  - ESP 订阅 CTS / weather-req / system-req 时被动响应推数据
 
 依赖:
     pip install -r requirements.txt
 
 运行:
     python desktop_companion.py              # 实际执行 Windows 动作
-    python desktop_companion.py --dry-run    # 只打印事件，不触发系统动作
+    python desktop_companion.py --dry-run    # 只打印媒体键事件，不触发系统动作
 
 Ctrl+C 退出。连接断开 3s 后自动重连。
 """
@@ -58,7 +56,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 DEVICE_NAME         = "ESP32-S3-DEMO"
-CONTROL_CHAR_UUID   = "8a5c0006-0000-4aef-b87e-4fa1e0c7e0f6"   # Notify (ESP → PC, button)
 MEDIA_CHAR_UUID     = "8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP)
 CTS_CHAR_UUID       = "00002a2b-0000-1000-8000-00805f9b34fb"   # Write+Notify (PC 写 CTS / ESP 发 notify 请求时间同步)
 WEATHER_CHAR_UUID   = "8a5c0002-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 天气推送)
@@ -66,14 +63,11 @@ WEATHER_REQ_CHAR_UUID = "8a5c000b-0000-4aef-b87e-4fa1e0c7e0f6" # Notify (ESP →
 NOTIFY_CHAR_UUID    = "8a5c0004-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 通知推送)
 SYSTEM_CHAR_UUID    = "8a5c000a-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 系统监控)
 SYSTEM_REQ_CHAR_UUID = "8a5c000c-0000-4aef-b87e-4fa1e0c7e0f6"  # Notify (ESP → PC, 请求系统数据)
+MEDIA_BUTTON_CHAR_UUID = "8a5c000d-0000-4aef-b87e-4fa1e0c7e0f6" # Notify (ESP → PC, 媒体键按钮)
 
-# control_event_t: type u8, id u8, action u8, _r u8, value i16, seq u16  → 8 B
-EVENT_STRUCT = "<BBBBhH"
-EVENT_SIZE   = struct.calcsize(EVENT_STRUCT)
-
-# control_event_t.type 枚举（与固件 control_service.h 对齐）
-# 反向请求（time/weather/system）改由各业务 char 的 notify 承担，不再复用此通道
-EVENT_TYPE_BUTTON  = 0
+# media_button_event_t: id u8, action u8, seq u16  → 4 B (严格对齐 services/media_service.h)
+MEDIA_BTN_STRUCT = "<BBH"
+MEDIA_BTN_SIZE   = struct.calcsize(MEDIA_BTN_STRUCT)
 
 # CTS (Current Time Service) 结构：与 services/time_service.c 的 ble_cts_current_time_t 对齐
 # year u16, month u8, day u8, hour u8, minute u8, second u8,
@@ -259,7 +253,6 @@ def fetch_weather(lat: float, lon: float, city: str) -> Weather:
 # Windows 动作（接收屏上按钮事件后调用）
 # ---------------------------------------------------------------------------
 
-VK_VOLUME_MUTE      = 0xAD
 VK_MEDIA_PREV_TRACK = 0xB1
 VK_MEDIA_NEXT_TRACK = 0xB0
 VK_MEDIA_PLAY_PAUSE = 0xB3
@@ -272,23 +265,18 @@ def _send_key(vk: int) -> None:
     user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
 
-def _lock_screen() -> None:
-    ctypes.windll.user32.LockWorkStation()
-
-
-BUTTON_ACTIONS = {
-    0: ("Lock",      _lock_screen),
-    1: ("Mute",      lambda: _send_key(VK_VOLUME_MUTE)),
-    2: ("Prev",      lambda: _send_key(VK_MEDIA_PREV_TRACK)),
-    3: ("Next",      lambda: _send_key(VK_MEDIA_NEXT_TRACK)),
-    4: ("PlayPause", lambda: _send_key(VK_MEDIA_PLAY_PAUSE)),
+# media_button_event_t.id 枚举（与 services/media_service.h 对齐）
+MEDIA_BTN_ACTIONS = {
+    0: ("Prev",      lambda: _send_key(VK_MEDIA_PREV_TRACK)),
+    1: ("PlayPause", lambda: _send_key(VK_MEDIA_PLAY_PAUSE)),
+    2: ("Next",      lambda: _send_key(VK_MEDIA_NEXT_TRACK)),
 }
 
 
-class ControlHandler:
-    """解析 control_char 的 8 字节按钮事件，做去重 + 执行 Windows 动作。
+class MediaButtonHandler:
+    """解析 media_button char 的 4 字节事件，做去重 + 触发 Windows 媒体键。
 
-    反向请求（time/weather/system）已拆到各自业务 char 的 notify，不再走这里。
+    通道 UUID: 0x8a5c000d (ESP → PC NOTIFY)
     """
 
     def __init__(self, dry_run: bool):
@@ -296,37 +284,36 @@ class ControlHandler:
         self._last_seq: int | None = None
 
     def on_notify(self, _handle: int, data: bytearray) -> None:
-        if len(data) != EVENT_SIZE:
-            log(f"[warn] ctrl 长度异常 {len(data)}B: {bytes(data).hex()}")
+        if len(data) != MEDIA_BTN_SIZE:
+            log(f"[warn] media-btn 长度异常 {len(data)}B: {bytes(data).hex()}")
             return
 
-        type_, btn_id, action, _r, value, seq = struct.unpack(
-            EVENT_STRUCT, bytes(data))
+        btn_id, action, seq = struct.unpack(MEDIA_BTN_STRUCT, bytes(data))
 
-        if type_ != EVENT_TYPE_BUTTON or action != 0:
-            log(f"[info] 忽略 ctrl type={type_} action={action} id={btn_id} seq={seq}")
+        if action != 0:
+            log(f"[info] 忽略 media-btn action={action} id={btn_id} seq={seq}")
             return
 
         if seq == self._last_seq:
-            log(f"[dup] ctrl seq={seq} 重复，忽略")
+            log(f"[dup] media-btn seq={seq} 重复，忽略")
             return
         self._last_seq = seq
 
-        entry = BUTTON_ACTIONS.get(btn_id)
+        entry = MEDIA_BTN_ACTIONS.get(btn_id)
         if entry is None:
-            log(f"[warn] ctrl 未知 id={btn_id} seq={seq}")
+            log(f"[warn] media-btn 未知 id={btn_id} seq={seq}")
             return
 
         name, fn = entry
         prefix = "[dry]" if self.dry_run else "[exec]"
-        log(f"{prefix} ctrl id={btn_id} seq={seq}  → {name}")
+        log(f"{prefix} media-btn id={btn_id} seq={seq}  → {name}")
 
         if self.dry_run:
             return
         try:
             fn()
         except Exception as e:
-            log(f"[err] ctrl 动作失败: {e}")
+            log(f"[err] media-btn 动作失败: {e}")
 
 
 def make_request_handler(name: str, action):
@@ -940,7 +927,7 @@ async def push_weather(client: BleakClient) -> None:
         log(f"[err] weather 推送失败: {e}")
 
 
-async def run_session(ctrl: ControlHandler) -> None:
+async def run_session(dry_run: bool) -> None:
     log(f"扫描 {DEVICE_NAME}...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT_S)
     if device is None:
@@ -950,9 +937,10 @@ async def run_session(ctrl: ControlHandler) -> None:
     async with BleakClient(device) as client:
         loop = asyncio.get_running_loop()
 
-        # 1) 按钮事件（ESP → PC → Windows 动作）
-        await client.start_notify(CONTROL_CHAR_UUID, ctrl.on_notify)
-        log(f"已订阅 control {CONTROL_CHAR_UUID}")
+        # 1) 媒体键按钮（page_music 上/下/播暂）
+        media_btn = MediaButtonHandler(dry_run=dry_run)
+        await client.start_notify(MEDIA_BUTTON_CHAR_UUID, media_btn.on_notify)
+        log(f"已订阅 media-btn {MEDIA_BUTTON_CHAR_UUID}")
 
         # 2) 时间同步请求（ESP 订阅 CTS 的 NOTIFY → PC 立即 push_cts）
         await client.start_notify(
@@ -1005,7 +993,7 @@ async def run_session(ctrl: ControlHandler) -> None:
             await sys_pub.stop()
             await toast_pub.stop()
             await pub.stop()
-            for uuid in (CONTROL_CHAR_UUID, CTS_CHAR_UUID, WEATHER_REQ_CHAR_UUID):
+            for uuid in (MEDIA_BUTTON_CHAR_UUID, CTS_CHAR_UUID, WEATHER_REQ_CHAR_UUID):
                 try:
                     await client.stop_notify(uuid)
                 except Exception:
@@ -1018,10 +1006,10 @@ async def run_session(ctrl: ControlHandler) -> None:
         log("连接断开")
 
 
-async def main(ctrl: ControlHandler) -> None:
+async def main(dry_run: bool) -> None:
     while True:
         try:
-            await run_session(ctrl)
+            await run_session(dry_run)
         except asyncio.CancelledError:
             return
         except Exception as e:
@@ -1034,7 +1022,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dry-run", action="store_true",
-                   help="控制按钮事件只打印、不触发 Windows 动作（联调用）")
+                   help="媒体键事件只打印、不触发 Windows 动作（联调用）")
     return p.parse_args()
 
 
@@ -1043,8 +1031,7 @@ if __name__ == "__main__":
         print("windows only（winsdk 仅支持 Windows）", file=sys.stderr)
         sys.exit(1)
     args = parse_args()
-    ctrl = ControlHandler(dry_run=args.dry_run)
     try:
-        asyncio.run(main(ctrl))
+        asyncio.run(main(args.dry_run))
     except KeyboardInterrupt:
         print("\nbye")

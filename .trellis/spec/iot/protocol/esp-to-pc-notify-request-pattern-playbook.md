@@ -45,7 +45,7 @@
 ## 设计边界
 
 - **不做**：再建一个"集中式请求 service"代理所有请求（会回到触发/响应分属两地的老坑）
-- **不做**：在 control_service 里塞 REQUEST type（已废弃，见重构记录）
+- **不做**：在已退役的 control_service 里塞 REQUEST type（该 service 已下线，见"迁移说明"）
 - **不做**：在 NOTIFY body 里塞大段参数（需要参数时，请求方先改 WRITE 再触发请求；NOTIFY 只做信号）
 - **先做最小闭环**：单一 service 的请求跑通，再扩到 2 ~ 3 个
 
@@ -119,11 +119,15 @@
 - NOTIFY 发不出去（`notify failed rc=-1`）→ MTU / `flags` 配置 / characteristic 没开 `BLE_GATT_CHR_F_NOTIFY`
 - 两个 service 的 req char UUID 混淆 → 在文件顶部用注释写清楚 short code；UUID DR 表格同步维护
 
-## 迁移说明（从旧模式换过来）
+## 迁移说明（历史演进）
 
-旧模式（v1）：集中在 `control_service` 的 NOTIFY 上用 `type=REQUEST + id=<req>`。已废弃，原因：
+**v1（已废弃）**：集中在 `control_service` 的 NOTIFY 上用 `type=REQUEST + id=<req>`。弃用原因：
 - 触发端（control）与响应端（time/weather/system write char）跨 service，维护时难定位
 - 新增 REQUEST 必须同步改 control 的 enum 和 PC 端路由表，复杂度随业务线性上升
 - `control_service` 的名字与实际承载的语义漂移（不再是纯"控制"）
 
-当前模式（v2）：本文档所述。迁移后 `control_service` 回归"按钮事件通道"单一职责。
+**v2（本文档所述）**：REQUEST 拆回各业务 service 自管，触发端与响应端同属一个 service。
+
+**v3（2026-04-21 起，当前）**：`control_service` **整体退役**（`0x8a5c0005/0006` RETIRED）。由于 lock/mute 功能已放弃、媒体键（prev/pp/next）也按同一"触发端同 service"原则迁到 `media_service` 的 NOTIFY char `0x8a5c000d`（payload = 4B `media_button_event_t`），本项目不再有任何"ESP → PC 按钮事件"走独立 control 通道。
+
+> **推论**：本项目范围内，所有 ESP → PC 的 NOTIFY（不论是"请 PC 推数据"还是"屏上按钮触发 PC 动作"）都归属**各自业务 service**。UUID 分配规则和本 playbook 描述完全一致，唯一区别是 media-button 的 payload 为 4B 事件结构而非 1B seq。
