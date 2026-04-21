@@ -25,9 +25,11 @@ import ctypes
 import struct
 import sys
 import time as _time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
+import requests
 from bleak import BleakClient, BleakScanner
 
 try:
@@ -48,6 +50,7 @@ DEVICE_NAME         = "ESP32-S3-DEMO"
 CONTROL_CHAR_UUID   = "8a5c0006-0000-4aef-b87e-4fa1e0c7e0f6"   # Notify (ESP → PC)
 MEDIA_CHAR_UUID     = "8a5c0008-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP)
 CTS_CHAR_UUID       = "00002a2b-0000-1000-8000-00805f9b34fb"   # Write  (PC → ESP, 时间同步)
+WEATHER_CHAR_UUID   = "8a5c0002-0000-4aef-b87e-4fa1e0c7e0f6"   # Write  (PC → ESP, 天气推送)
 
 # control_event_t: type u8, id u8, action u8, _r u8, value i16, seq u16  → 8 B
 EVENT_STRUCT = "<BBBBhH"
@@ -59,11 +62,20 @@ EVENT_TYPE_REQUEST = 2
 
 # REQUEST 事件的 id 语义
 REQUEST_TIME_SYNC  = 0
+REQUEST_WEATHER    = 1
 
 # CTS (Current Time Service) 结构：与 services/time_service.c 的 ble_cts_current_time_t 对齐
 # year u16, month u8, day u8, hour u8, minute u8, second u8,
 # day_of_week u8 (1=Mon..7=Sun), fractions256 u8, adjust_reason u8  → 10 B
 CTS_STRUCT = "<HBBBBBBBB"
+
+# 天气 payload（与 services/weather_manager.h 对齐，68 B）
+WEATHER_STRUCT = "<hhhBBI24s32s"
+WEATHER_CACHE_TTL_S = 600   # 10 分钟缓存：防反复打开天气页把 API 打爆
+
+# 天气编码（与 weather_manager.h WEATHER_CODE_* 对齐）
+WC_UNKNOWN, WC_CLEAR, WC_CLOUDY, WC_OVERCAST = 0, 1, 2, 3
+WC_RAIN, WC_SNOW, WC_FOG, WC_THUNDER = 4, 5, 6, 7
 
 # media_payload_t: playing u8, _r u8, pos i16, dur i16, _pad u16,
 #                  sample_ts u32, title 48s, artist 32s  → 92 B
@@ -84,6 +96,104 @@ ARTIST_MAX_BYTES = 31
 
 def log(msg: str) -> None:
     print(f"{_time.strftime('%H:%M:%S')}  {msg}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# 天气拉取（搬自 ble_time_sync.py，服务于 ESP 反向请求）
+# ---------------------------------------------------------------------------
+
+def wmo_to_code(wmo: int) -> int:
+    if wmo == 0:
+        return WC_CLEAR
+    if wmo in (1, 2):
+        return WC_CLOUDY
+    if wmo == 3:
+        return WC_OVERCAST
+    if wmo in (45, 48):
+        return WC_FOG
+    if wmo in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
+        return WC_RAIN
+    if wmo in (71, 73, 75, 77, 85, 86):
+        return WC_SNOW
+    if wmo in (95, 96, 99):
+        return WC_THUNDER
+    return WC_UNKNOWN
+
+
+WMO_DESC = {
+    0: "Clear",
+    1: "Mainly Clear", 2: "Partly Cloudy", 3: "Overcast",
+    45: "Fog", 48: "Fog",
+    51: "Light Drizzle", 53: "Drizzle", 55: "Heavy Drizzle",
+    56: "Freezing Drizzle", 57: "Freezing Drizzle",
+    61: "Light Rain", 63: "Rain", 65: "Heavy Rain",
+    66: "Freezing Rain", 67: "Freezing Rain",
+    71: "Light Snow", 73: "Snow", 75: "Heavy Snow",
+    77: "Snow Grains",
+    80: "Light Showers", 81: "Showers", 82: "Heavy Showers",
+    85: "Snow Showers", 86: "Heavy Snow Showers",
+    95: "Thunderstorm", 96: "Thunder w/ Hail", 99: "Thunder w/ Hail",
+}
+
+
+@dataclass
+class Weather:
+    temp: float
+    temp_min: float
+    temp_max: float
+    humidity: int
+    wmo: int
+    city: str
+
+    def desc(self) -> str:
+        return WMO_DESC.get(self.wmo, "Unknown")
+
+    def pack(self) -> bytes:
+        city_b = self.city.encode("utf-8")[:23].ljust(24, b"\0")
+        desc_b = self.desc().encode("utf-8")[:31].ljust(32, b"\0")
+        return struct.pack(
+            WEATHER_STRUCT,
+            int(round(self.temp * 10)),
+            int(round(self.temp_min * 10)),
+            int(round(self.temp_max * 10)),
+            max(0, min(100, int(self.humidity))),
+            wmo_to_code(self.wmo),
+            int(_time.time()),
+            city_b,
+            desc_b,
+        )
+
+
+def locate_by_ip() -> tuple[float, float, str]:
+    r = requests.get("http://ip-api.com/json/", timeout=10)
+    r.raise_for_status()
+    j = r.json()
+    if j.get("status") != "success":
+        raise RuntimeError(f"ip-api: {j}")
+    return float(j["lat"]), float(j["lon"]), j.get("city", "Unknown")
+
+
+def fetch_weather(lat: float, lon: float, city: str) -> Weather:
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&current=temperature_2m,relative_humidity_2m,weather_code"
+        "&daily=temperature_2m_max,temperature_2m_min"
+        "&timezone=auto&forecast_days=1"
+    )
+    r = requests.get(url, timeout=15)
+    r.raise_for_status()
+    j = r.json()
+    cur = j["current"]
+    daily = j["daily"]
+    return Weather(
+        temp=float(cur["temperature_2m"]),
+        temp_min=float(daily["temperature_2m_min"][0]),
+        temp_max=float(daily["temperature_2m_max"][0]),
+        humidity=int(cur["relative_humidity_2m"]),
+        wmo=int(cur["weather_code"]),
+        city=city,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +232,17 @@ class ControlHandler:
     def __init__(self, dry_run: bool):
         self.dry_run = dry_run
         self._last_seq: int | None = None
-        # ESP 反向请求 PC 推送时间的回调，由 run_session 在连接建立后注入
+        # ESP 反向请求 PC 推送时间/天气的回调，由 run_session 在连接建立后注入
         self._time_sync_cb: Optional[Callable[[], Awaitable[None]]] = None
+        self._weather_cb: Optional[Callable[[], Awaitable[None]]] = None
 
     def set_time_sync_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
         """连接期间把 push_cts 闭包挂到 handler；断开时传 None 清除。"""
         self._time_sync_cb = cb
+
+    def set_weather_cb(self, cb: Optional[Callable[[], Awaitable[None]]]) -> None:
+        """连接期间把 push_weather 闭包挂到 handler；断开时传 None 清除。"""
+        self._weather_cb = cb
 
     def on_notify(self, _handle: int, data: bytearray) -> None:
         if len(data) != EVENT_SIZE:
@@ -137,7 +252,7 @@ class ControlHandler:
         type_, btn_id, action, _r, value, seq = struct.unpack(
             EVENT_STRUCT, bytes(data))
 
-        # ESP → PC 请求事件（目前只有 TIME_SYNC）
+        # ESP → PC 请求事件路由
         if type_ == EVENT_TYPE_REQUEST:
             if btn_id == REQUEST_TIME_SYNC:
                 log(f"[req] time_sync seq={seq}")
@@ -145,6 +260,12 @@ class ControlHandler:
                     asyncio.create_task(self._time_sync_cb())
                 else:
                     log("[warn] time_sync 请求到达但未安装回调")
+            elif btn_id == REQUEST_WEATHER:
+                log(f"[req] weather seq={seq}")
+                if self._weather_cb is not None:
+                    asyncio.create_task(self._weather_cb())
+                else:
+                    log("[warn] weather 请求到达但未安装回调")
             else:
                 log(f"[warn] 未知 request id={btn_id} seq={seq}")
             return
@@ -358,6 +479,50 @@ async def push_cts(client: BleakClient) -> None:
         log(f"[err] cts 推送失败: {e}")
 
 
+# 模块级天气缓存：避免反复进出天气页时打爆 open-meteo / ip-api 免费 API
+_weather_cache: Optional[tuple[float, Weather]] = None
+_weather_location: Optional[tuple[float, float, str]] = None
+
+
+async def push_weather(client: BleakClient) -> None:
+    """响应 ESP 的 REQUEST_WEATHER：拉一次天气写到 weather_char。
+
+    10 分钟内的重复请求直接回缓存数据；IP 定位结果全局保留一次，因为
+    桌面机短时间内地理位置不会变。fetch/locate 都是同步 requests，
+    放到 loop.run_in_executor 避免阻塞事件循环。
+    """
+    global _weather_cache, _weather_location
+
+    loop = asyncio.get_running_loop()
+    now_ts = _time.time()
+
+    # 命中缓存直接推送（天气 5-10 分钟粒度足够精确）
+    if _weather_cache is not None and now_ts - _weather_cache[0] < WEATHER_CACHE_TTL_S:
+        w = _weather_cache[1]
+        age = int(now_ts - _weather_cache[0])
+        log(f"[weather] cache hit ({age}s old)")
+    else:
+        try:
+            if _weather_location is None:
+                _weather_location = await loop.run_in_executor(None, locate_by_ip)
+                lat, lon, city = _weather_location
+                log(f"[weather] located: {city} ({lat:.2f}, {lon:.2f})")
+            lat, lon, city = _weather_location
+            w = await loop.run_in_executor(None, fetch_weather, lat, lon, city)
+            _weather_cache = (now_ts, w)
+            log(f"[weather] fetched: {w.desc()} {w.temp:.1f}°C "
+                f"[{w.temp_min:.0f}/{w.temp_max:.0f}] humid={w.humidity}%")
+        except Exception as e:
+            log(f"[err] weather fetch 失败: {e}")
+            return
+
+    try:
+        await client.write_gatt_char(WEATHER_CHAR_UUID, w.pack(), response=True)
+        log(f"[weather] pushed {w.city}")
+    except Exception as e:
+        log(f"[err] weather 推送失败: {e}")
+
+
 async def run_session(ctrl: ControlHandler) -> None:
     log(f"扫描 {DEVICE_NAME}...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT_S)
@@ -368,8 +533,9 @@ async def run_session(ctrl: ControlHandler) -> None:
     async with BleakClient(device) as client:
         loop = asyncio.get_running_loop()
 
-        # 把 time_sync 回调注入 handler；ESP 在我们 start_notify 后会请求一次
+        # 注入反向请求回调：ESP 订阅 control_char 或进入天气页时分别触发
         ctrl.set_time_sync_cb(lambda: push_cts(client))
+        ctrl.set_weather_cb(lambda: push_weather(client))
 
         # 1) 订阅控制按钮
         await client.start_notify(CONTROL_CHAR_UUID, ctrl.on_notify)
@@ -392,6 +558,7 @@ async def run_session(ctrl: ControlHandler) -> None:
             except Exception:
                 pass
             ctrl.set_time_sync_cb(None)
+            ctrl.set_weather_cb(None)
         log("连接断开")
 
 

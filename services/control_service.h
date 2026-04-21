@@ -25,9 +25,11 @@ extern "C" {
 
 /* REQUEST 事件的 id 语义（PC 端同步维护）：
  *   0 = 请求 PC 写 CTS 推送当前时间
- *   预留：1 = 天气重推，2 = 媒体重推……
+ *   1 = 请求 PC 推送当前天气（PC 端做 10 分钟缓存，防反复打 API）
+ *   预留：2 = 媒体重推……
  */
 #define CONTROL_REQUEST_TIME_SYNC 0
+#define CONTROL_REQUEST_WEATHER   1
 
 /* 与 PC 端 struct.pack("<BBBBhH", ...) 严格对齐（8 字节） */
 typedef struct {

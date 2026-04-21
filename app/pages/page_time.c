@@ -106,7 +106,7 @@ static void update_display(void)
     lv_label_set_text(s_ui.time_label, time_buf);
 
     char date_buf[32];
-    snprintf(date_buf, sizeof(date_buf), "%d月%d日 · 星期%s",
+    snprintf(date_buf, sizeof(date_buf), "%d月%d日 星期%s",
              t.tm_mon + 1, t.tm_mday, WEEKDAY_CN[t.tm_wday % 7]);
     lv_label_set_text(s_ui.date_label, date_buf);
 }

@@ -241,3 +241,6 @@ idf.py -p COM3 erase-flash
 ## 许可证
 
 仅供学习参考。
+
+只需要牢记一条红线：BLE 回调 / GAP event handler 里永远只能做两件事 —— push 到 manager
+队列，或调 NimBLE API；不要碰 LVGL、不要阻塞、不要写 NVS。
