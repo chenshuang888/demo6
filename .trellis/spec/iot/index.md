@@ -1,96 +1,58 @@
-# 物联网 / 嵌入式知识库（`.trellis/spec/iot`）
+# 本项目 Spec 知识库（`.trellis/spec/iot`）
 
-> 目标：把“可复用的落地路径 / 契约 / 坑位 / 验收方式”沉淀成**可导航的入口**，让 AI/新人在同类场景下不重复踩坑，按稳定工作流推进。
->
-> 约定：本目录默认使用简体中文；专有名词、命令名、API 名、文件名保留英文。
-
----
-
-## 范围（你会在这里找到什么）
-
-- 固件：ESP-IDF / FreeRTOS / 驱动 / 存储与并发（NVS 等）
-- 设备 UI：LVGL / 屏幕 / 触摸 / 字体 / 内存与性能
-- 协议与工具链：串口/蓝牙/网络协议、命令表、状态机、解析与兼容策略
-- OTA：分区/槽位、回滚、版本检查、下载与写入、进度回调
-- 主机端工具：PC/Web/Electron、串口管理、Uploader/Downloader
-- 跨层一致性：设备 ↔ 主机 ↔ Web/云 的语义对齐与版本兼容
+> **定位**：本项目（ESP32-S3 N16R8 demo6）每次改动都要查的**29 条硬规则**，按"改什么→看哪条"快速导航。
+> **精简历程**：原始 138 条 → 第一轮 Fit Check 归档 54 条场景无关 → 第二轮按使用频率归档 57 条通用经验（见 `../_general_library/`），最终 29 条（含一次 sanity check 回调整：port-layering DR 和 freertos smell checklist 挪回，侧边栏导航和 utf8-truncate 挪出）。
+> **语言**：中文。专有名词、API、文件名保留英文。
 
 ---
 
-## Related Guidelines（跨域必读）
+## 按场景快速导航（Quick Navigation）
 
-| Guideline | 位置 | 什么时候读 |
-| --- | --- | --- |
-| IoT Shared（跨域硬规则） | `./shared/index.md` | 总是（任何 IoT 变更前） |
-| 复用安全（Fit Check） | `./guides/spec-reuse-safety-playbook.md` | 复用任何条目前 |
-| 防复发验收清单 | `./guides/anti-regression-acceptance-checklist.md` | 改动完成后验收前 |
-
----
-
-## 入口索引（从这里开始）
-
-| 领域 | 入口 | 说明 | 优先级 |
-| --- | --- | --- | --- |
-| 共享规则 | `./shared/index.md` | 跨层语义、版本、错误码、验收与协作约束 | **Must Read** |
-| 固件 | `./firmware/index.md` | ESP-IDF/FreeRTOS、并发/存储、项目基线、典型坑位 | **Must Read** |
-| 设备 UI | `./device-ui/index.md` | LVGL port 分层、旋转/坐标、字体与资源、稳定性边界 | **Must Read** |
-| 协议 | `./protocol/index.md` | 帧格式、命令表、状态机、错误码、兼容策略、契约 | **Must Read** |
-| OTA | `./ota/index.md` | 升级流程、分区/槽位、回滚、验收路径 | **Must Read** |
-| 主机工具链 | `./host-tools/index.md` | 串口与协议栈分层、前后端拆分、共享脚本风险 | Reference |
-| 使用指南 | `./guides/index.md` | 如何复用条目、如何验收、如何脱离 flash-debug 死循环 | Reference |
+| 我要改什么 | 先看哪条 |
+|---|---|
+| 改 BLE（加 service / 改协议） | `./protocol/ble-custom-uuid-allocation-decision-record.md` + 对应 `./protocol/ble-*-contract.md` |
+| ESP 要主动问 PC 要数据 | `./protocol/esp-to-pc-notify-request-pattern-playbook.md` |
+| 改板型 / sdkconfig / Flash / PSRAM | `./firmware/esp32s3-n16r8-qio-flash-oct-psram-pitfall.md` + `./firmware/sdkconfig-defaults-regen-pitfall.md` |
+| 改 NVS / 持久化 | `./firmware/nvs-single-writer-contract.md` + `./firmware/nvs-persist-settings-store-layering-playbook.md` |
+| 加 LVGL 页面 | `./device-ui/lvgl-page-router-minimal-contract.md` |
+| 改字体 / 图标 | `./device-ui/tiny-ttf-plus-fontawesome-fallback-playbook.md` |
+| 改 PC 端（desktop_companion / ble_time_sync） | `./host-tools/desktop-companion-bleak-multiplex-playbook.md` |
+| 任何改动前 | `./guides/spec-reuse-safety-playbook.md` |
+| 任何改动后 | `./guides/anti-regression-acceptance-checklist.md` |
 
 ---
 
-## 与 Trellis 工作流的结合（最小用法）
+## 入口索引（按子目录）
 
-```bash
-# 为某个任务初始化上下文（让 AI 默认拿到 IoT 入口 spec）
-python ./.trellis/scripts/task.py init-context <taskDir> iot
-
-# 根据任务需要再补充注入更具体的条目（固件/UI/协议/OTA/主机工具）
-python ./.trellis/scripts/task.py add-context <taskDir> implement .trellis/spec/iot/<path>.md "<reason>"
-```
-
----
-
-## 按任务快速找文档（Quick Navigation）
-
-| 我要做什么 | 先读这些 |
-| --- | --- |
-| 复用一个“看起来很像”的条目 | `./guides/spec-reuse-safety-playbook.md` |
-| ESP-IDF 新项目/迁移基线 | `./firmware/esp-idf-project-baseline-checklist.md` |
-| NVS/持久化（并发风险） | `./firmware/nvs-single-writer-contract.md`、`./firmware/nvs-concurrency-pitfall.md` |
-| LVGL port 分层/bring-up | `./device-ui/lvgl-port-layering-playbook.md` |
-| 协议改动/新增命令（跨端一致） | `./protocol/index.md`（先找对应 `*contract.md`） |
-| 做一次 OTA 升级链路（含回滚） | `./ota/system-update-playbook.md` |
-| 把“反复烧录调试”变成“本机快速验证” | `./guides/host-based-contract-tests-to-break-flash-debug-loop-playbook.md` |
+| 目录 | 条数 | 聚焦 |
+|---|---|---|
+| [`./firmware/`](./firmware/index.md) | 10 | N16R8 硬件基线 + NVS 持久化 + 本项目 ble_conn/notify_manager + FreeRTOS smell |
+| [`./device-ui/`](./device-ui/index.md) | 7 | 40 行部分刷新 + port 分层 DR/playbook + Tiny TTF 字体链 + page_router 契约 |
+| [`./protocol/`](./protocol/index.md) | 6 | 5 个 BLE service 的 payload 契约 + UUID DR + 反向请求模式 |
+| [`./host-tools/`](./host-tools/index.md) | 2 | desktop_companion.py + Windows SMTC |
+| [`./guides/`](./guides/index.md) | 4 | Fit Check + 防复发 + UI/NimBLE 线程契约 |
+| [`./ota/`](./ota/index.md) | 0 | 本项目未实现；参考 `_general_library/ota/` |
+| [`./shared/`](./shared/index.md) | 0 | 跨域硬规则（暂空壳） |
 
 ---
 
-## 核心硬规则摘要（Core Rules Summary）
+## 核心硬规则（每次改动都要守）
 
-1. **先 Fit Check 再复用**：相似场景常常“背景不同”，未经适配直接照搬实现细节，优先视为高风险。  
-2. **跨层语义必须有契约**：协议字段/编码/长度/对齐/单位/版本策略要写进 `*contract.md`，避免“两边各写一套解析”。  
-3. **UI 线程/回调不做阻塞 IO**：UI 只做轻量渲染与事件分发，重活/IO 下沉到后台任务，通过队列/通知桥接。  
-4. **持久化遵循单写者**：NVS/Flash 写入必须明确 owner 与串行化策略，避免“偶发坏掉”。  
-5. **OTA 属于高风险动作**：必须设计回滚路径与验收清单，流程/状态机/校验顺序不可随意跳步。  
-6. **变更要同步更新文档与工具链**：协议/流程/配置变更默认要同步更新：固件实现、主机工具、契约文档、验收清单。  
-
----
-
-## 文档类型（如何写、如何读）
-
-本知识库条目以 5 类为主（模板位于 `./_templates/`）：
-
-1. **Playbook**：从 0 到通的落地步骤（包含验证顺序）。  
-2. **Pitfall**：症状 → 根因 → 修复 → 预防 → 验收。  
-3. **Checklist**：防漏检查表（上线/重构/跨层变更）。  
-4. **Contract**：协议/数据结构/语义 + 版本兼容规则（跨层一致性核心）。  
-5. **Decision Record**：取舍与边界（为什么选 A 不选 B，如何回退）。  
+1. **Fit Check 再复用**：照搬前检查平台/SDK/外设/资源/并发模型
+2. **BLE 跨层语义有契约**：`protocol/*-contract.md` 是单一事实源
+3. **UI 线程不阻塞 IO**：重活 → 后台任务 → 队列桥接
+4. **NVS 单写者**：跨任务/回调都要遵守，参考 `firmware/nvs-*`
+5. **触发端与响应端同 service**：BLE notify 不跨 service 复用（v3 规则）
+6. **改 protocol/flow/config 同步更新**：固件 + 主机工具 + 契约 + 验收清单四处同步
 
 ---
 
-## 与其他 spec 的关系
+## 通用 IoT 经验库
 
-- `.trellis/spec/guides/`：通用思维导图（根因分析、跨层思考、复用思考等）。
-- `.trellis/spec/iot/`：按 **IoT 真实链路**组织（固件 ↔ UI ↔ 协议 ↔ OTA ↔ 主机工具），并补齐跨层契约与验收。
+凡不在上表的通用经验（ESP-IDF / LVGL / FreeRTOS 泛化做法、WiFi/HTTP/LittleFS 等本项目不用的技术、各种 playbook / checklist）已归档到 [`../_general_library/`](../_general_library/README.md)，本项目理论用不到但留档备查。
+
+---
+
+## 与 Trellis 工作流的结合
+
+新任务 PRD 落地时，按本 index 的"Quick Navigation"找入口即可。不再推荐 `task.py init-context` / `add-context`（本项目实践表明用不上那套 multi-agent pipeline）。
