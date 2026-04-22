@@ -29,16 +29,6 @@ esp_err_t weather_service_init(void);
  */
 esp_err_t weather_service_send_request(void);
 
-/**
- * @brief BLE 驱动层在 GAP_EVENT_SUBSCRIBE 里调用
- *
- * 内部检查 attr_handle 是否是本服务的 notify char、cur_notify 是否 0→1 上升沿；
- * 匹配时自动发一次 weather_service_send_request()。
- */
-void weather_service_on_subscribe(uint16_t attr_handle,
-                                  uint8_t prev_notify,
-                                  uint8_t cur_notify);
-
 #ifdef __cplusplus
 }
 #endif

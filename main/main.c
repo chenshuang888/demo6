@@ -4,13 +4,19 @@
 #include "esp_log.h"
 #include "app_main.h"
 #include "ble_driver.h"
+#include "time_service.h"
+#include "weather_service.h"
+#include "notify_service.h"
+#include "media_service.h"
+#include "system_service.h"
 #include "time_manager.h"
 #include "weather_manager.h"
 #include "notify_manager.h"
 #include "media_manager.h"
 #include "system_manager.h"
 #include "persist.h"
-#include "settings_store.h"
+#include "backlight_storage.h"
+#include "time_storage.h"
 
 static const char *TAG = "main";
 
@@ -35,11 +41,12 @@ void app_main(void)
 
     // 最先初始化持久化，后续模块都可能用 NVS
     ESP_ERROR_CHECK(persist_init());
-    ESP_ERROR_CHECK(settings_store_init());
+    ESP_ERROR_CHECK(backlight_storage_init());
+    ESP_ERROR_CHECK(time_storage_init());
 
     // 恢复上次关机前的时间；失败走硬编码默认
     struct timeval tv;
-    if (settings_store_load_last_time(&tv) == ESP_OK) {
+    if (time_storage_load_last(&tv) == ESP_OK) {
         settimeofday(&tv, NULL);
         ESP_LOGI(TAG, "system time restored from NVS");
     } else {
@@ -62,8 +69,14 @@ void app_main(void)
     // 初始化系统监控管理器（PC 推 CPU/MEM/DISK/BAT/NET/Temp）
     ESP_ERROR_CHECK(system_manager_init());
 
-    // 初始化 BLE
-    ESP_ERROR_CHECK(ble_driver_init());
+    // 初始化 BLE：先拉起 NimBLE 协议栈，再让各 service 自行注册 GATT 表，最后启动 host task
+    ESP_ERROR_CHECK(ble_driver_nimble_init());
+    ESP_ERROR_CHECK(time_service_init());
+    ESP_ERROR_CHECK(weather_service_init());
+    ESP_ERROR_CHECK(notify_service_init());
+    ESP_ERROR_CHECK(media_service_init());
+    ESP_ERROR_CHECK(system_service_init());
+    ESP_ERROR_CHECK(ble_driver_nimble_start());
 
     // 再初始化应用
     ESP_ERROR_CHECK(app_main_init());

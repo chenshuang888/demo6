@@ -1,6 +1,6 @@
 #include "system_service.h"
 #include "system_manager.h"
-#include "ble_conn.h"
+#include "ble_driver.h"
 
 #include "esp_log.h"
 #include "host/ble_hs.h"
@@ -30,6 +30,11 @@ static const ble_uuid128_t s_system_req_uuid = BLE_UUID128_INIT(
 static uint16_t s_chr_val_handle;
 static uint16_t s_req_val_handle;
 static uint8_t  s_req_seq = 0;
+
+/* 前向声明：init 末尾要注册给 ble_driver */
+static void system_service_on_subscribe(uint16_t attr_handle,
+                                        uint8_t prev_notify,
+                                        uint8_t cur_notify);
 
 static int system_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                             struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -122,13 +127,19 @@ esp_err_t system_service_init(void)
     ESP_LOGI(TAG, "BLE System Service initialized");
     ESP_LOGI(TAG, "Service UUID: 8a5c0009-0000-4aef-b87e-4fa1e0c7e0f6");
 
+    esp_err_t err = ble_driver_register_subscribe_cb(system_service_on_subscribe);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register subscribe_cb failed: %d", err);
+        return err;
+    }
+
     return ESP_OK;
 }
 
 esp_err_t system_service_send_request(void)
 {
     uint16_t conn_handle;
-    if (!ble_conn_get_handle(&conn_handle)) {
+    if (!ble_driver_get_conn_handle(&conn_handle)) {
         ESP_LOGD(TAG, "not connected, drop system request");
         return ESP_ERR_INVALID_STATE;
     }
@@ -150,9 +161,9 @@ esp_err_t system_service_send_request(void)
     return ESP_OK;
 }
 
-void system_service_on_subscribe(uint16_t attr_handle,
-                                 uint8_t prev_notify,
-                                 uint8_t cur_notify)
+static void system_service_on_subscribe(uint16_t attr_handle,
+                                        uint8_t prev_notify,
+                                        uint8_t cur_notify)
 {
     if (attr_handle != s_req_val_handle) return;
     if (prev_notify || !cur_notify) return;

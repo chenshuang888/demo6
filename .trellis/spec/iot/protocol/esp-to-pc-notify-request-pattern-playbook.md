@@ -33,12 +33,12 @@
   - `weather_service`: write `0x8a5c0002` / notify-req `0x8a5c000B`
   - `system_service`: write `0x8a5c000A` / notify-req `0x8a5c000C`
   - `time_service`: CTS 标准 char `0x2A2B` 同时 WRITE+NOTIFY（不新增 UUID，直接复用 NOTIFY flag）
-- **订阅回调钩子**：每个业务 service 导出 `*_service_on_subscribe(handle, prev, cur)`，由 `drivers/ble_driver.c` 的 SUBSCRIBE 分支逐个调用
+- **订阅回调钩子**：每个业务 service 在自己的 `*_service_init()` 末尾调用 `ble_driver_register_subscribe_cb(cb)` 向 drivers 注册一个 static 回调；GAP SUBSCRIBE 事件到来时由 ble_driver 遍历所有注册回调分发
 
 ## 前置条件
 
 - 对应业务 service 已注册（`<svc>_service_init` 返回 ESP_OK）
-- `ble_conn` 能拿到当前 `conn_handle`
+- `ble_driver_get_conn_handle()` 能拿到当前 `conn_handle`
 - PC 端分别 `start_notify` 了各业务的 notify char（不是只订阅 control）
 - PC 端对每个 notify 注册一个独立 handler，在 handler 里调用对应的 push 函数
 
@@ -54,11 +54,12 @@
 - **`<business>_service.c`（GATT 层，NimBLE host 线程）**：
   - GATT 表内定义 write char 和 notify char 两个 characteristic（time 例外：同 char 同时 WRITE+NOTIFY）
   - `<svc>_service_send_request(void)`：组 1B seq payload + `ble_gatts_notify_custom`
-  - `<svc>_service_on_subscribe(attr, prev, cur)`：匹配本服务的 notify char val_handle + 上升沿检测 + 触发 `send_request`
+  - `<svc>_service_on_subscribe(attr, prev, cur)`（static）：匹配本服务的 notify char val_handle + 上升沿检测 + 触发 `send_request`
+  - `<svc>_service_init()` 末尾 `ble_driver_register_subscribe_cb(<svc>_service_on_subscribe)` 注册给 drivers
 - **业务层（UI 线程）**：
   - 页面 enter 时调 `<svc>_service_send_request()`（幂等；未连接时静默丢弃）
 - **drivers/ble_driver.c（GAP 层）**：
-  - `BLE_GAP_EVENT_SUBSCRIBE` 分支遍历所有业务 service 的 `on_subscribe` 钩子，各自判断是否是自己的 char
+  - `BLE_GAP_EVENT_SUBSCRIBE` 分支遍历已注册的 subscribe_cb 数组逐个调用，不感知具体业务
 - **PC 端**：
   - `start_notify(<svc>_req_uuid, handler)`，每个 handler 只负责调对应 push 函数（`push_cts` / `push_weather` / `sys_pub.push_now`）
   - 不做跨 service 路由，不共享 handler
@@ -71,23 +72,26 @@
    ```c
    esp_err_t <svc>_service_send_request(void) {
        uint16_t conn;
-       if (!ble_conn_get_handle(&conn)) return ESP_ERR_INVALID_STATE;
+       if (!ble_driver_get_conn_handle(&conn)) return ESP_ERR_INVALID_STATE;
        uint8_t payload = ++s_req_seq;
        struct os_mbuf *om = ble_hs_mbuf_from_flat(&payload, 1);
        return ble_gatts_notify_custom(conn, s_req_val_handle, om) ? ESP_FAIL : ESP_OK;
    }
    ```
 
-3. **订阅钩子**：
+3. **订阅钩子**（static，在 `<svc>_service.c` 文件内部）：
    ```c
-   void <svc>_service_on_subscribe(uint16_t attr, uint8_t prev, uint8_t cur) {
+   static void <svc>_service_on_subscribe(uint16_t attr, uint8_t prev, uint8_t cur) {
        if (attr != s_req_val_handle) return;
        if (prev || !cur) return;
        <svc>_service_send_request();
    }
    ```
 
-4. **ble_driver 挂接**：`drivers/ble_driver.c` SUBSCRIBE 分支补一行调 `<svc>_service_on_subscribe(attr, prev, cur)`。
+4. **注册到 drivers**：在 `<svc>_service_init()` 末尾：
+   ```c
+   ble_driver_register_subscribe_cb(<svc>_service_on_subscribe);
+   ```
 
 5. **PC 端订阅**：`tools/desktop_companion.py` 的 `run_session` 里：
    ```python
@@ -109,7 +113,7 @@
 
 1. 最小冒烟：PC 端 `start_notify(<svc>_req_uuid)` 上升沿 → ESP 日志 `svc request sent: seq=1` → PC 日志 `[req] <svc> seq=1` → WRITE char 回调数据
 2. 幂等：页面反复 enter/exit，每次 send_request 日志 seq 递增、PC 端每次都能触发 push（time 无副作用，weather 进入缓存，system 覆写最后一帧）
-3. 断连重连：断开时 `ble_conn_get_handle` 返回 false，日志 `not connected, drop <svc> request`；重连后首次 subscribe 上升沿自动触发
+3. 断连重连：断开时 `ble_driver_get_conn_handle` 返回 false，日志 `not connected, drop <svc> request`；重连后首次 subscribe 上升沿自动触发
 4. UUID 冲突：扫描 GATT 表确认 notify char 在 service 下的位置，确认 PC 端 `start_notify` UUID 拼写一致
 
 ## 常见问题

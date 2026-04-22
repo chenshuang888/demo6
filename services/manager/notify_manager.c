@@ -1,5 +1,5 @@
 #include "notify_manager.h"
-#include "persist.h"
+#include "notify_storage.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,11 +12,9 @@ static const char *TAG = "notify_mgr";
 #define NOTIFY_QUEUE_DEPTH 4
 
 /* ------------------------------------------------------------------
- * NVS 布局
+ * 持久化 blob 版本
  * ------------------------------------------------------------------ */
 
-#define NS_NOTIFY              "notify"
-#define KEY_NOTIFY_RING        "ring"
 #define NOTIFY_PERSIST_VERSION 1
 
 typedef struct {
@@ -55,7 +53,7 @@ static void load_from_nvs(void)
 {
     static notify_persist_v1_t blob;  /* 1364 B，避免占栈 */
     size_t len = sizeof(blob);
-    esp_err_t err = persist_get_blob(NS_NOTIFY, KEY_NOTIFY_RING, &blob, &len);
+    esp_err_t err = notify_storage_load(&blob, &len);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(TAG, "no snapshot in NVS, starting empty");
         return;
@@ -87,7 +85,7 @@ static esp_err_t save_to_nvs(void)
     blob.count   = (uint8_t)s_count;
     memcpy(blob.ring, s_ring, sizeof(s_ring));
 
-    return persist_set_blob(NS_NOTIFY, KEY_NOTIFY_RING, &blob, sizeof(blob));
+    return notify_storage_save(&blob, sizeof(blob));
 }
 
 /* ------------------------------------------------------------------

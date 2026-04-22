@@ -18,5 +18,6 @@ idf_component_register(
         framework
         drivers
         services
+        storage
         lvgl
 )

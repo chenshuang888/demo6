@@ -1,6 +1,6 @@
 #include "media_service.h"
 #include "media_manager.h"
-#include "ble_conn.h"
+#include "ble_driver.h"
 
 #include "esp_log.h"
 #include "host/ble_hs.h"
@@ -134,7 +134,7 @@ esp_err_t media_service_init(void)
 esp_err_t media_service_send_button(uint8_t id)
 {
     uint16_t conn_handle;
-    if (!ble_conn_get_handle(&conn_handle)) {
+    if (!ble_driver_get_conn_handle(&conn_handle)) {
         ESP_LOGD(TAG, "not connected, drop button id=%u", id);
         return ESP_ERR_INVALID_STATE;
     }

@@ -1,6 +1,7 @@
 #include "time_service.h"
 #include "time_manager.h"
-#include "ble_conn.h"
+#include "ble_driver.h"
+
 #include "esp_log.h"
 #include "host/ble_hs.h"
 #include "host/ble_gatt.h"
@@ -36,6 +37,9 @@ static uint8_t s_req_seq = 0;
 /* 前向声明 */
 static int current_time_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                                   struct ble_gatt_access_ctxt *ctxt, void *arg);
+static void time_service_on_subscribe(uint16_t attr_handle,
+                                      uint8_t prev_notify,
+                                      uint8_t cur_notify);
 
 /* ============================================================================
  * 时间格式转换函数
@@ -198,13 +202,20 @@ esp_err_t time_service_init(void)
     ESP_LOGI(TAG, "BLE Time Service initialized successfully");
     ESP_LOGI(TAG, "Service UUID: 0x1805, Characteristic UUID: 0x2A2B");
 
+    /* 订阅 SUBSCRIBE 事件：central 开 notify 时自动触发一次 send_request */
+    esp_err_t err = ble_driver_register_subscribe_cb(time_service_on_subscribe);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register subscribe_cb failed: %d", err);
+        return err;
+    }
+
     return ESP_OK;
 }
 
 esp_err_t time_service_send_request(void)
 {
     uint16_t conn_handle;
-    if (!ble_conn_get_handle(&conn_handle)) {
+    if (!ble_driver_get_conn_handle(&conn_handle)) {
         ESP_LOGD(TAG, "not connected, drop time request");
         return ESP_ERR_INVALID_STATE;
     }
@@ -226,9 +237,9 @@ esp_err_t time_service_send_request(void)
     return ESP_OK;
 }
 
-void time_service_on_subscribe(uint16_t attr_handle,
-                               uint8_t prev_notify,
-                               uint8_t cur_notify)
+static void time_service_on_subscribe(uint16_t attr_handle,
+                                      uint8_t prev_notify,
+                                      uint8_t cur_notify)
 {
     if (attr_handle != current_time_val_handle) return;
     if (prev_notify || !cur_notify) return;

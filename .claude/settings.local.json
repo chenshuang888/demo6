@@ -22,7 +22,10 @@
       "Bash(curl -sL -o NotoSansSC-Regular.ttf \"https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf\")",
       "Bash(mkdir -p .trellis/spec/_archived_unrelated/2026-04-21/protocol .trellis/spec/_archived_unrelated/2026-04-21/guides)",
       "Bash(mv .trellis/spec/iot/protocol/ble-control-service-event-contract.md .trellis/spec/_archived_unrelated/2026-04-21/protocol/)",
-      "Bash(mv .trellis/spec/iot/guides/ble-service-boundary-control-vs-media-decision-record.md .trellis/spec/_archived_unrelated/2026-04-21/guides/)"
+      "Bash(mv .trellis/spec/iot/guides/ble-service-boundary-control-vs-media-decision-record.md .trellis/spec/_archived_unrelated/2026-04-21/guides/)",
+      "Bash(sort -k6,7)",
+      "Bash(mkdir -p services/manager)",
+      "Bash(mv services/time_manager.c services/time_manager.h services/weather_manager.c services/weather_manager.h services/notify_manager.c services/notify_manager.h services/media_manager.c services/media_manager.h services/system_manager.c services/system_manager.h services/manager/)"
     ]
   }
 }

@@ -1,23 +1,22 @@
 idf_component_register(
     SRCS
         "time_service.c"
-        "time_manager.c"
-        "weather_manager.c"
+        "manager/time_manager.c"
+        "manager/weather_manager.c"
         "weather_service.c"
-        "notify_manager.c"
+        "manager/notify_manager.c"
         "notify_service.c"
-        "media_manager.c"
+        "manager/media_manager.c"
         "media_service.c"
-        "system_manager.c"
+        "manager/system_manager.c"
         "system_service.c"
-        "ble_conn.c"
-        "persist.c"
-        "settings_store.c"
     INCLUDE_DIRS
         "."
+        "manager"
     PRIV_REQUIRES
         bt
     REQUIRES
         esp_timer
-        nvs_flash
+        storage
+        drivers
 )

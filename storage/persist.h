@@ -12,9 +12,8 @@ extern "C" {
 /**
  * @brief 初始化 NVS 子系统
  *
- * 取代原先由 ble_driver_init 调用的 nvs_flash_init，因为现在多个模块
- * （settings_store / notify_manager / 未来的 wifi / bonding）都依赖 NVS，
- * 应当在 app_main 最开始统一初始化一次。
+ * 必须在 app_main 最开始统一初始化一次（settings_store / notify_manager /
+ * 未来的 wifi / bonding 都依赖 NVS）。
  *
  * 失败时按官方推荐流程擦除后重试。
  */

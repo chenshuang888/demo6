@@ -16,7 +16,8 @@
 #include "notify_manager.h"
 #include "media_manager.h"
 #include "system_manager.h"
-#include "settings_store.h"
+#include "backlight_storage.h"
+#include "time_storage.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -36,7 +37,7 @@ static void ui_task(void *arg)
 
         /* 周期性持久化（内部自判是否到时间/dirty，绝大多数 tick 即返回） */
         notify_manager_tick_flush();
-        settings_store_tick_save_time();
+        time_storage_tick_save();
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -52,7 +53,7 @@ esp_err_t app_main_init(void)
     app_fonts_init();
 
     /* 恢复上次背光亮度（lvgl_port_init 内部已初始化 lcd_panel） */
-    lcd_panel_set_backlight(settings_store_get_backlight());
+    lcd_panel_set_backlight(backlight_storage_get());
 
     ESP_ERROR_CHECK(page_router_init());
 

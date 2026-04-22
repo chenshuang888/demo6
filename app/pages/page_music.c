@@ -4,7 +4,7 @@
 #include "app_fonts.h"
 #include "media_manager.h"
 #include "media_service.h"
-#include "ble_conn.h"
+#include "ble_driver.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -329,7 +329,7 @@ static void page_init(void)
 
     s_ui.last_version = 0;
     s_ui.last_pos_sec = -2;     /* 强制首帧刷新 */
-    s_ui.last_connected = ble_conn_is_connected();
+    s_ui.last_connected = ble_driver_is_connected();
     apply_connection_style(s_ui.last_connected);
 
     /* 进入页面时若已有快照，立刻渲染一次 */
@@ -372,7 +372,7 @@ static void page_music_destroy(void)
 static void page_music_update(void)
 {
     /* 连接状态变更（Play/Pause 图标和连接色改动） */
-    bool now_connected = ble_conn_is_connected();
+    bool now_connected = ble_driver_is_connected();
     if (now_connected != s_ui.last_connected) {
         s_ui.last_connected = now_connected;
         apply_connection_style(now_connected);

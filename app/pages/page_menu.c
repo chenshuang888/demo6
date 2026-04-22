@@ -4,7 +4,7 @@
 #include "app_fonts.h"
 #include "ble_driver.h"
 #include "lcd_panel.h"
-#include "settings_store.h"
+#include "backlight_storage.h"
 
 /* ============================================================================
  * 配色（与时间页一致）
@@ -267,7 +267,7 @@ static void on_backlight_clicked(lv_event_t *e)
     uint8_t duty = BACKLIGHT_STEPS[next];
 
     /* 先持久化（语义层），再硬件生效（驱动层） */
-    settings_store_set_backlight(duty);
+    backlight_storage_set(duty);
     lcd_panel_set_backlight(duty);
 
     update_backlight_label();

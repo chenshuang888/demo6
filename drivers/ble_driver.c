@@ -1,4 +1,6 @@
 #include "ble_driver.h"
+
+#include <string.h>
 #include "esp_log.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -7,30 +9,29 @@
 #include "host/ble_store.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
-#include "time_service.h"
-#include "weather_service.h"
-#include "notify_service.h"
-#include "media_service.h"
-#include "system_service.h"
-#include "ble_conn.h"
 
 /* 外部库函数声明 */
 void ble_store_config_init(void);
 
 static const char *TAG = "ble_driver";
 
-/* BLE 设备名称 */
-#define BLE_DEVICE_NAME "ESP32-S3-DEMO"
+#define BLE_DEVICE_NAME        "ESP32-S3-DEMO"
+#define BLE_DRIVER_MAX_SUB_CBS 8
 
-/* 连接状态（跨线程读写：BLE host 线程写、UI 线程读） */
-static volatile bool s_is_connected = false;
-static uint16_t s_conn_handle = 0;
+/* SUBSCRIBE 回调数组：service 自己在 init 阶段注册，GAP 事件触发时遍历分发。 */
+static ble_driver_subscribe_cb_t s_sub_cbs[BLE_DRIVER_MAX_SUB_CBS];
+static size_t                    s_sub_cb_count = 0;
+
+/* 连接状态：BLE host 线程写、UI 线程读 —— 单写多读标量走 volatile 契约
+ * （参考 spec/iot/guides/nimble-ui-thread-communication-contract.md）。 */
+static volatile bool     s_is_connected = false;
+static volatile uint16_t s_conn_handle  = 0;
 
 /* 前向声明 */
 static void ble_host_task(void *param);
 static void on_stack_reset(int reason);
 static void on_stack_sync(void);
-static int gap_event_handler(struct ble_gap_event *event, void *arg);
+static int  gap_event_handler(struct ble_gap_event *event, void *arg);
 
 /* ============================================================================
  * BLE 协议栈回调函数
@@ -47,14 +48,12 @@ static void on_stack_sync(void)
 
     ESP_LOGI(TAG, "BLE stack synced");
 
-    /* 确保使用随机地址 */
     rc = ble_hs_util_ensure_addr(0);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to ensure address, error: %d", rc);
         return;
     }
 
-    /* 获取设备地址 */
     uint8_t addr[6] = {0};
     rc = ble_hs_id_infer_auto(0, &addr[0]);
     if (rc != 0) {
@@ -65,7 +64,6 @@ static void on_stack_sync(void)
     ESP_LOGI(TAG, "Device address: %02x:%02x:%02x:%02x:%02x:%02x",
              addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
 
-    /* 开始广播 */
     ble_driver_start_advertising();
 }
 
@@ -78,11 +76,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
                  event->connect.status);
 
         if (event->connect.status == 0) {
+            /* 先写 handle 再置 connected，避免 reader 看到"已连接但 handle 无效"的中间态。 */
+            s_conn_handle  = event->connect.conn_handle;
             s_is_connected = true;
-            s_conn_handle = event->connect.conn_handle;
-            ble_conn_set(true, event->connect.conn_handle);
         } else {
-            /* 连接失败，重新开始广播 */
             ble_driver_start_advertising();
         }
         break;
@@ -90,10 +87,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "Disconnected; reason=%d", event->disconnect.reason);
         s_is_connected = false;
-        s_conn_handle = 0;
-        ble_conn_set(false, 0);
+        s_conn_handle  = 0;
 
-        /* 断开连接后重新开始广播 */
         ble_driver_start_advertising();
         break;
 
@@ -106,17 +101,12 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
                  event->subscribe.conn_handle,
                  event->subscribe.attr_handle,
                  event->subscribe.cur_notify);
-        /* 每个 service 自管反向请求：按 attr_handle 匹配自己关心的 char，
-         * 上升沿触发一次 notify 让 PC 主动推送对应数据。 */
-        time_service_on_subscribe(event->subscribe.attr_handle,
-                                  event->subscribe.prev_notify,
-                                  event->subscribe.cur_notify);
-        weather_service_on_subscribe(event->subscribe.attr_handle,
-                                     event->subscribe.prev_notify,
-                                     event->subscribe.cur_notify);
-        system_service_on_subscribe(event->subscribe.attr_handle,
-                                    event->subscribe.prev_notify,
-                                    event->subscribe.cur_notify);
+        /* 广播分发：每个注册 cb 自判 attr_handle 是否属于自己，不匹配即返回。 */
+        for (size_t i = 0; i < s_sub_cb_count; i++) {
+            s_sub_cbs[i](event->subscribe.attr_handle,
+                         event->subscribe.prev_notify,
+                         event->subscribe.cur_notify);
+        }
         break;
 
     case BLE_GAP_EVENT_MTU:
@@ -140,10 +130,9 @@ static void ble_host_task(void *param)
 {
     ESP_LOGI(TAG, "BLE host task started");
 
-    /* 运行 NimBLE 主机，此函数会阻塞直到 nimble_port_stop() 被调用 */
+    /* 运行 NimBLE 主机，阻塞直到 nimble_port_stop() */
     nimble_port_run();
 
-    /* 清理 */
     nimble_port_freertos_deinit();
 }
 
@@ -151,117 +140,75 @@ static void ble_host_task(void *param)
  * 公共接口函数
  * ============================================================================ */
 
-esp_err_t ble_driver_init(void)
+esp_err_t ble_driver_nimble_init(void)
 {
     int rc;
 
-    ESP_LOGI(TAG, "Initializing BLE driver");
+    ESP_LOGI(TAG, "Initializing NimBLE stack (GATT registration window open)");
 
-    /* 初始化 NimBLE 协议栈（NVS 已在 app_main 通过 persist_init 完成） */
     esp_err_t ret = nimble_port_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize NimBLE stack, error: %d", ret);
         return ESP_FAIL;
     }
 
-    /* 初始化 GAP 服务 */
     ble_svc_gap_init();
-
-    /* 初始化 GATT 服务 */
     ble_svc_gatt_init();
 
-    /* 初始化时间服务 */
-    ret = time_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize time service, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 初始化天气服务 */
-    ret = weather_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize weather service, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 初始化通知服务 */
-    ret = notify_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize notify service, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 初始化媒体推送服务（PC → ESP 曲目信息） */
-    ret = media_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize media service, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 初始化系统监控服务（PC → ESP 推 CPU/MEM/DISK/BAT/NET/Temp） */
-    ret = system_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize system service, error: %d", ret);
-        return ESP_FAIL;
-    }
-
-    /* 设置设备名称 */
     rc = ble_svc_gap_device_name_set(BLE_DEVICE_NAME);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to set device name, error: %d", rc);
         return ESP_FAIL;
     }
 
-    /* 配置 NimBLE 主机 */
-    ble_hs_cfg.reset_cb = on_stack_reset;
-    ble_hs_cfg.sync_cb = on_stack_sync;
-    ble_hs_cfg.gatts_register_cb = NULL;
-    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ESP_LOGI(TAG, "NimBLE stack ready; register GATT services now");
+    return ESP_OK;
+}
 
-    /* 初始化存储配置 */
+esp_err_t ble_driver_nimble_start(void)
+{
+    ESP_LOGI(TAG, "Starting NimBLE host task");
+
+    ble_hs_cfg.reset_cb          = on_stack_reset;
+    ble_hs_cfg.sync_cb           = on_stack_sync;
+    ble_hs_cfg.gatts_register_cb = NULL;
+    ble_hs_cfg.store_status_cb   = ble_store_util_status_rr;
+
     ble_store_config_init();
 
-    /* 启动 NimBLE 主机任务 */
+    /* 启动 host task；sync 回调触发时会自动调用 start_advertising() */
     nimble_port_freertos_init(ble_host_task);
 
-    ESP_LOGI(TAG, "BLE driver initialized successfully");
+    ESP_LOGI(TAG, "NimBLE host task started");
     return ESP_OK;
 }
 
 esp_err_t ble_driver_start_advertising(void)
 {
     struct ble_gap_adv_params adv_params;
-    struct ble_hs_adv_fields fields;
-    int rc;
+    struct ble_hs_adv_fields  fields;
+    int                       rc;
 
     ESP_LOGI(TAG, "Starting BLE advertising");
 
-    /* 设置广播数据 */
     memset(&fields, 0, sizeof(fields));
-
-    /* 设置标志 */
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-
-    /* 设置设备名称 */
-    fields.name = (uint8_t *)BLE_DEVICE_NAME;
-    fields.name_len = strlen(BLE_DEVICE_NAME);
+    fields.flags            = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.name             = (uint8_t *)BLE_DEVICE_NAME;
+    fields.name_len         = strlen(BLE_DEVICE_NAME);
     fields.name_is_complete = 1;
 
-    /* 设置广播数据 */
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to set advertising data, error: %d", rc);
         return ESP_FAIL;
     }
 
-    /* 配置广播参数 */
     memset(&adv_params, 0, sizeof(adv_params));
-    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  /* 可连接 */
-    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;  /* 通用可发现 */
-    adv_params.itvl_min = 0x20;  /* 20ms */
-    adv_params.itvl_max = 0x40;  /* 40ms */
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    adv_params.itvl_min  = 0x20; /* 20 ms */
+    adv_params.itvl_max  = 0x40; /* 40 ms */
 
-    /* 开始广播 */
     rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
                            &adv_params, gap_event_handler, NULL);
     if (rc != 0) {
@@ -292,4 +239,28 @@ esp_err_t ble_driver_stop_advertising(void)
 bool ble_driver_is_connected(void)
 {
     return s_is_connected;
+}
+
+bool ble_driver_get_conn_handle(uint16_t *out)
+{
+    if (!s_is_connected) {
+        return false;
+    }
+    if (out) {
+        *out = s_conn_handle;
+    }
+    return true;
+}
+
+esp_err_t ble_driver_register_subscribe_cb(ble_driver_subscribe_cb_t cb)
+{
+    if (cb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_sub_cb_count >= BLE_DRIVER_MAX_SUB_CBS) {
+        ESP_LOGE(TAG, "subscribe_cb array full (max=%d)", BLE_DRIVER_MAX_SUB_CBS);
+        return ESP_ERR_NO_MEM;
+    }
+    s_sub_cbs[s_sub_cb_count++] = cb;
+    return ESP_OK;
 }

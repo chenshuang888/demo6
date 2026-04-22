@@ -22,7 +22,6 @@
 
 ## 本项目核心模块
 
-- `./ble-conn-shared-state-to-avoid-component-cycle-playbook.md`：`ble_conn` 共享连接句柄，避免 `services` 反向依赖 `drivers` 组件循环依赖
 - `./notify-manager-ringbuffer-version-playbook.md`：`notify_manager` 10 条环形缓冲 + version 去重 + BLE→UI 入队
 
 ## 任务架构

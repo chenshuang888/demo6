@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "persist.c"
+        "backlight_storage.c"
+        "time_storage.c"
+        "notify_storage.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        nvs_flash
+        esp_timer
+)

@@ -56,11 +56,10 @@ demo6/
 │   ├── lcd_panel.c/h        # ST7789 + 背光 PWM
 │   ├── touch_ft5x06.c/h     # FT5x06 I2C 触摸
 │   ├── lvgl_port.c/h        # LVGL 移植（双缓冲 40 行）
-│   └── ble_driver.c/h       # NimBLE 协议栈 + GAP
+│   └── ble_driver.c/h       # NimBLE 协议栈 + GAP + 连接句柄 / SUBSCRIBE 分发
 ├── services/                 # 业务服务层
 │   ├── persist.c/h          # NVS KV / blob 统一封装
 │   ├── settings_store.c/h   # 背光 + 系统时间持久化
-│   ├── ble_conn.c/h         # BLE 连接状态中转（避免循环依赖）
 │   ├── time_service/manager       # Current Time Service
 │   ├── weather_service/manager    # 天气推送
 │   ├── notify_service/manager     # 通知推送（10 条环形缓冲 + 落盘）
@@ -85,8 +84,8 @@ main
            │  page_router
            ├─► framework
            │
-           ├─► drivers ──► services (ble_conn 中转)
-           │   (ble_driver 上报连接状态)
+           ├─► services ──► drivers
+           │   (service 自管 GATT 注册；通过 ble_driver_get_conn_handle 发 notify)
            │
            └─► services
                persist → settings_store / notify_manager
@@ -94,7 +93,7 @@ main
                     └── *_manager (UI 线程单写)
 ```
 
-关键约束：**drivers → services 单向依赖**。连接状态由 `ble_conn` 中转层托管，防止 services 反向依赖 drivers。
+关键约束：**services → drivers 单向依赖**。连接句柄由 `ble_driver_get_conn_handle()` 暴露；SUBSCRIBE 事件由各 service 自己注册回调订阅。
 
 ### Service / Manager 解耦模式
 

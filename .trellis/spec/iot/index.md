@@ -26,7 +26,7 @@
 
 | 目录 | 条数 | 聚焦 |
 |---|---|---|
-| [`./firmware/`](./firmware/index.md) | 10 | N16R8 硬件基线 + NVS 持久化 + 本项目 ble_conn/notify_manager + FreeRTOS smell |
+| [`./firmware/`](./firmware/index.md) | 9 | N16R8 硬件基线 + NVS 持久化 + 本项目 notify_manager + FreeRTOS smell |
 | [`./device-ui/`](./device-ui/index.md) | 7 | 40 行部分刷新 + port 分层 DR/playbook + Tiny TTF 字体链 + page_router 契约 |
 | [`./protocol/`](./protocol/index.md) | 6 | 5 个 BLE service 的 payload 契约 + UUID DR + 反向请求模式 |
 | [`./host-tools/`](./host-tools/index.md) | 2 | desktop_companion.py + Windows SMTC |
