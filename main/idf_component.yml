@@ -3,3 +3,5 @@ dependencies:
     version: "^9.0.0"
   espressif/esp_lcd_touch_ft5x06:
     version: "^1.0.0"
+  makgordon/esp-mquickjs:
+    version: "^0.2.1"

@@ -34,9 +34,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.5.0
+  makgordon/esp-mquickjs:
+    component_hash: 78d1ad070ab92253047715cb2c96da5687d2cbc30ba3366197a3b70cb69a054f
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.1
 direct_dependencies:
 - espressif/esp_lcd_touch_ft5x06
 - lvgl/lvgl
-manifest_hash: 5eb1ab37b4acfdf9c31707664f6a248856fd9de8c8680c9f71c5bd442d035c5c
+- makgordon/esp-mquickjs
+manifest_hash: 3191f8f605dd9d855f9aa40be838b5bc3d62c2f68b196c41f1520e9e9ba62e5a
 target: esp32s3
 version: 2.0.0

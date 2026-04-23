@@ -10,6 +10,8 @@ idf_component_register(
         "pages/page_notifications.c"
         "pages/page_music.c"
         "pages/page_system.c"
+        # Dynamic App（MicroQuickJS MVP）演示页
+        "pages/page_dynamic_app.c"
     INCLUDE_DIRS
         "."
     EMBED_FILES
@@ -19,5 +21,7 @@ idf_component_register(
         drivers
         services
         storage
+        # dynamic_app 组件：脚本运行时 + Script->UI 队列桥接
+        dynamic_app
         lvgl
 )
