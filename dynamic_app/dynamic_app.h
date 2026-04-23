@@ -20,8 +20,8 @@ extern "C" {
  *
  * 典型调用顺序：
  * 1) `dynamic_app_init()`：创建脚本任务、初始化 UI 队列（通常在系统启动时调用一次）
- * 2) 页面 create 时：`dynamic_app_ui_register_label()` 注册要被脚本更新的 label
- * 3) 页面显示后：`dynamic_app_start()` 启动脚本
+ * 2) 页面 create 时：创建 Dynamic App 的 root 容器，并调用 `dynamic_app_ui_set_root(root)`（只在 `PAGE_DYNAMIC_APP` 生命周期内有效）
+ * 3) 页面显示后：`dynamic_app_start()` 启动脚本（脚本侧可先 `sys.ui.createLabel(id)`，再 `sys.ui.setText(id, text)`）
  * 4) UI 循环中：周期性调用 `dynamic_app_ui_drain()` 让 UI 指令尽快生效
  * 5) 页面 destroy 时：`dynamic_app_stop()` 停止脚本并 `dynamic_app_ui_unregister_all()` 清理映射表
  *
@@ -52,16 +52,20 @@ void dynamic_app_stop(void);
  * UI 线程：注册一个可被 JS 通过 id 操作的 LVGL Label。
  *
  * JS 侧用法（示例）：
+ * - `sys.ui.createLabel("time");`
  * - `sys.ui.setText("time", "12:34:56")`
  *
  * C 侧用法（示例）：
- * - 页面创建 `lv_label_t *lbl` 后调用：`dynamic_app_ui_register_label("time", lbl);`
+ * - 如果页面预先创建了 `lv_label_t *lbl`，可调用：`dynamic_app_ui_register_label("time", lbl);`
+ * - 如果希望脚本自行创建 label，则页面 create 时调用：`dynamic_app_ui_set_root(root);`
  *
  * 注意：
  * - 只允许在 UI 线程调用（因为要校验/持有 LVGL 对象）
  * - obj 必须是 label（内部会做类型检查）
  */
 esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj);
+
+void dynamic_app_ui_set_root(lv_obj_t *root);
 
 /**
  * UI 线程：注销所有已注册的 Label 映射。

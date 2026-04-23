@@ -7,7 +7,10 @@
 static const char *TAG = "dynamic_app_ui";
 
 #define UI_QUEUE_LEN 16
-#define UI_REGISTRY_MAX 8
+#define UI_REGISTRY_MAX 16
+
+/* 只允许在 PAGE_DYNAMIC_APP 创建 UI：该 root 仅由该页面的 UI Task 设置/清空 */
+static volatile lv_obj_t *s_root = NULL;
 
 /*
  * UI 指令队列：
@@ -126,6 +129,26 @@ bool dynamic_app_ui_enqueue_set_text(const char *id, size_t id_len,
     return ok == pdTRUE;
 }
 
+bool dynamic_app_ui_enqueue_create_label(const char *id, size_t id_len)
+{
+    if (!s_ui_queue || !id) return false;
+
+    /* root 未设置时，表示当前不在 Dynamic App 页面：直接拒绝 */
+    if (s_root == NULL) {
+        return false;
+    }
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CREATE_LABEL;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    cmd.text[0] = '\0';
+
+    if (cmd.id[0] == '\0') return false;
+
+    BaseType_t ok = xQueueSend(s_ui_queue, &cmd, 0);
+    return ok == pdTRUE;
+}
+
 esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj)
 {
     if (!id || id[0] == '\0' || !obj) {
@@ -166,6 +189,12 @@ esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj)
     return ESP_ERR_NO_MEM;
 }
 
+void dynamic_app_ui_set_root(lv_obj_t *root)
+{
+    /* 只允许 UI Task 调用；这里不做强校验（root 可能为 NULL） */
+    s_root = root;
+}
+
 void dynamic_app_ui_unregister_all(void)
 {
     /* 只清 registry，不删除 LVGL 对象：对象由页面自己创建/销毁。 */
@@ -181,6 +210,53 @@ void dynamic_app_ui_drain(int max_count)
 
     while (handled < max_count && xQueueReceive(s_ui_queue, &cmd, 0) == pdTRUE) {
         handled++;
+        if (cmd.type == DYNAMIC_APP_UI_CMD_CREATE_LABEL) {
+            lv_obj_t *root = (lv_obj_t *)s_root;
+            if (!root || !lv_obj_is_valid(root)) {
+                /* 页面已销毁或未设置 root：丢弃 */
+                s_root = NULL;
+                continue;
+            }
+
+            /* 找到可用的 registry 槽位：同 id 复用，否则占用一个空槽 */
+            int slot = -1;
+            bool already_ok = false;
+            for (int i = 0; i < UI_REGISTRY_MAX; i++) {
+                if (!s_registry[i].used) continue;
+                if (strncmp(s_registry[i].id, cmd.id, sizeof(s_registry[i].id)) != 0) continue;
+                slot = i;
+                already_ok = (s_registry[i].obj && lv_obj_is_valid(s_registry[i].obj));
+                break;
+            }
+            if (already_ok) {
+                continue;
+            }
+
+            if (slot < 0) {
+                for (int i = 0; i < UI_REGISTRY_MAX; i++) {
+                    if (!s_registry[i].used) {
+                        slot = i;
+                        break;
+                    }
+                }
+            }
+            if (slot < 0) {
+                ESP_LOGW(TAG, "UI registry full, createLabel dropped (id=%s)", cmd.id);
+                continue;
+            }
+
+            lv_obj_t *lbl = lv_label_create(root);
+            lv_label_set_text(lbl, "");
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(lbl, lv_pct(100));
+
+            s_registry[slot].used = true;
+            strncpy(s_registry[slot].id, cmd.id, sizeof(s_registry[slot].id) - 1);
+            s_registry[slot].id[sizeof(s_registry[slot].id) - 1] = '\0';
+            s_registry[slot].obj = lbl;
+            continue;
+        }
+
         if (cmd.type != DYNAMIC_APP_UI_CMD_SET_TEXT) {
             continue;
         }

@@ -29,7 +29,7 @@ typedef struct {
     lv_obj_t *screen;
     lv_obj_t *back_btn;
     lv_obj_t *title_lbl;
-    lv_obj_t *time_lbl;
+    lv_obj_t *list_root;
     lv_style_t style_topbtn;
     lv_style_t style_topbtn_pressed;
 } page_dyn_ui_t;
@@ -87,15 +87,25 @@ static void create_body(void)
     lv_obj_set_width(hint, lv_pct(100));
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-    /* 这个 label 会被脚本通过 id="time" 更新。 */
-    s_ui.time_lbl = lv_label_create(s_ui.screen);
-    lv_label_set_text(s_ui.time_lbl, "--");
-    lv_obj_set_style_text_color(s_ui.time_lbl, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_font(s_ui.time_lbl, APP_FONT_HUGE, 0);
-    lv_obj_set_style_text_align(s_ui.time_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(s_ui.time_lbl, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(s_ui.time_lbl, lv_pct(100));
-    lv_obj_align(s_ui.time_lbl, LV_ALIGN_CENTER, 0, -10);
+    /*
+     * 动态 App 的“纵向列表”根容器：
+     * - 脚本调用 sys.ui.createLabel(id) 时，UI 线程会在该 root 下创建 label，并注册到 registry；
+     * - 后续脚本可通过 sys.ui.setText(id, text) 更新对应 label 的文本。
+     */
+    s_ui.list_root = lv_obj_create(s_ui.screen);
+    lv_obj_remove_style_all(s_ui.list_root);
+    lv_obj_set_size(s_ui.list_root, 220, 220);
+    lv_obj_align(s_ui.list_root, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_flex_flow(s_ui.list_root, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_ui.list_root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_all(s_ui.list_root, 0, 0);
+    lv_obj_set_style_pad_row(s_ui.list_root, 8, 0);
+    lv_obj_set_style_pad_column(s_ui.list_root, 0, 0);
+    lv_obj_set_style_text_color(s_ui.list_root, lv_color_hex(COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_ui.list_root, APP_FONT_TEXT, 0);
+    lv_obj_set_style_bg_opa(s_ui.list_root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_ui.list_root, 0, 0);
+    lv_obj_set_scrollbar_mode(s_ui.list_root, LV_SCROLLBAR_MODE_AUTO);
 }
 
 static void on_back_clicked(lv_event_t *e)
@@ -116,20 +126,8 @@ static void page_init(void)
     create_body();
     bind_events();
 
-    /*
-     * 本页面只把“可被脚本更新的控件”注册出去。
-     *
-     * 约定：
-     * - JS 侧会调用：sys.ui.setText("time", "...")；
-     * - C 侧在这里把 id="time" 映射到 s_ui.time_lbl；
-     * - UI 线程会在主循环中调用 dynamic_app_ui_drain()，把队列里的 setText 命令真正落到 LVGL 上。
-     */
-
-    /* “母版”约定：本页面只暴露 label 注册入口 */
-    esp_err_t err = dynamic_app_ui_register_label("time", s_ui.time_lbl);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "dynamic_app_ui_register_label failed: %s", esp_err_to_name(err));
-    }
+    /* 只允许在 PAGE_DYNAMIC_APP 创建 UI：root 只在本页面生命周期内有效 */
+    dynamic_app_ui_set_root(s_ui.list_root);
 
     /* 启动脚本：脚本线程开始跑 app.js，并通过队列异步驱动 UI。 */
     dynamic_app_start();
@@ -151,7 +149,8 @@ static void page_dynamic_app_destroy(void)
 {
     ESP_LOGI(TAG, "Destroying dynamic app page");
 
-    /* 先停脚本，再清 registry：避免脚本继续投递 UI 命令命中无效对象。 */
+    /* 先关闭 root 门禁，再停脚本并清 registry：避免销毁过程中仍创建/更新对象。 */
+    dynamic_app_ui_set_root(NULL);
     dynamic_app_stop();
     dynamic_app_ui_unregister_all();
 
@@ -165,7 +164,7 @@ static void page_dynamic_app_destroy(void)
 
     s_ui.back_btn = NULL;
     s_ui.title_lbl = NULL;
-    s_ui.time_lbl = NULL;
+    s_ui.list_root = NULL;
 }
 
 static const page_callbacks_t s_callbacks = {

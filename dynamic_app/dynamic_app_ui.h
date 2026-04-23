@@ -32,6 +32,7 @@ extern "C" {
 
 typedef enum {
     DYNAMIC_APP_UI_CMD_SET_TEXT = 1,
+    DYNAMIC_APP_UI_CMD_CREATE_LABEL = 2,
 } dynamic_app_ui_cmd_type_t;
 
 typedef struct {
@@ -59,9 +60,25 @@ bool dynamic_app_ui_enqueue_set_text(const char *id, size_t id_len,
                                      const char *text, size_t text_len);
 
 /**
+ * Script Task：请求在 Dynamic App 页面内创建一个 label，并注册到 registry。
+ *
+ * @note 该函数只负责入队，不直接触碰 LVGL。真正创建发生在 UI Task 的 dynamic_app_ui_drain()。
+ * @return true=成功入队；false=队列满/参数错误/当前不在 Dynamic App 页面（root 未设置）。
+ */
+bool dynamic_app_ui_enqueue_create_label(const char *id, size_t id_len);
+
+/**
  * UI Task：把一个 label 注册到 registry，让脚本可以通过 id 找到它。
  */
 esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj);
+
+/**
+ * UI Task：设置/清空 Dynamic App 页面可挂载的 root 容器。
+ *
+ * @note 为了保证“只允许在 PAGE_DYNAMIC_APP 创建”，root 只在该页面 create 时设置，
+ *       destroy 时清空。root==NULL 时会丢弃 CREATE_LABEL 命令。
+ */
+void dynamic_app_ui_set_root(lv_obj_t *root);
 
 /**
  * UI Task：清空所有 registry 项。

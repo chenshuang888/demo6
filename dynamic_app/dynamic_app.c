@@ -67,6 +67,7 @@ typedef struct {
 
     int func_idx_sys_log;
     int func_idx_sys_ui_set_text;
+    int func_idx_sys_ui_create_label;
     int func_idx_sys_time_uptime_ms;
     int func_idx_sys_time_uptime_str;
     int func_idx_set_interval;
@@ -165,6 +166,23 @@ static JSValue js_sys_ui_set_text(JSContext *ctx, JSValue *this_val, int argc, J
         /* 队列满/未初始化等，MVP 阶段直接忽略即可 */
     }
     return JS_UNDEFINED;
+}
+
+static JSValue js_sys_ui_create_label(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "sys.ui.createLabel(id) args missing");
+    }
+
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+
+    bool ok = dynamic_app_ui_enqueue_create_label(id, id_len);
+    return JS_NewBool(ok ? 1 : 0);
 }
 
 static JSValue js_sys_time_uptime_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -281,7 +299,7 @@ static esp_err_t setup_stdlib_and_context(void)
      *
      * 这里 extra=6：对应下面要注入到 JS 的 6 个函数。
      */
-    const int extra = 6; /* sys.log / sys.ui.setText / sys.time.uptimeMs / sys.time.uptimeStr / setInterval / clearInterval */
+    const int extra = 7; /* sys.log / sys.ui.setText / sys.ui.createLabel / sys.time.uptimeMs / sys.time.uptimeStr / setInterval / clearInterval */
     size_t total = base_count + (size_t)extra;
 
     s_rt.cfunc_table = heap_caps_malloc(total * sizeof(JSCFunctionDef),
@@ -294,10 +312,11 @@ static esp_err_t setup_stdlib_and_context(void)
 
     s_rt.func_idx_sys_log            = (int)base_count + 0;
     s_rt.func_idx_sys_ui_set_text    = (int)base_count + 1;
-    s_rt.func_idx_sys_time_uptime_ms = (int)base_count + 2;
-    s_rt.func_idx_sys_time_uptime_str = (int)base_count + 3;
-    s_rt.func_idx_set_interval       = (int)base_count + 4;
-    s_rt.func_idx_clear_interval     = (int)base_count + 5;
+    s_rt.func_idx_sys_ui_create_label = (int)base_count + 2;
+    s_rt.func_idx_sys_time_uptime_ms = (int)base_count + 3;
+    s_rt.func_idx_sys_time_uptime_str = (int)base_count + 4;
+    s_rt.func_idx_set_interval       = (int)base_count + 5;
+    s_rt.func_idx_clear_interval     = (int)base_count + 6;
 
     s_rt.cfunc_table[s_rt.func_idx_sys_log] = (JSCFunctionDef){
         .func.generic = js_sys_log,
@@ -311,6 +330,13 @@ static esp_err_t setup_stdlib_and_context(void)
         .name = JS_UNDEFINED,
         .def_type = JS_CFUNC_generic,
         .arg_count = 2,
+        .magic = 0,
+    };
+    s_rt.cfunc_table[s_rt.func_idx_sys_ui_create_label] = (JSCFunctionDef){
+        .func.generic = js_sys_ui_create_label,
+        .name = JS_UNDEFINED,
+        .def_type = JS_CFUNC_generic,
+        .arg_count = 1,
         .magic = 0,
     };
     s_rt.cfunc_table[s_rt.func_idx_set_interval] = (JSCFunctionDef){
@@ -404,6 +430,8 @@ static esp_err_t bind_sys_and_timers(JSContext *ctx)
     if (JS_IsException(fn_log)) return ESP_FAIL;
     JSValue fn_set_text = JS_NewCFunctionParams(ctx, s_rt.func_idx_sys_ui_set_text, JS_UNDEFINED);
     if (JS_IsException(fn_set_text)) return ESP_FAIL;
+    JSValue fn_create_label = JS_NewCFunctionParams(ctx, s_rt.func_idx_sys_ui_create_label, JS_UNDEFINED);
+    if (JS_IsException(fn_create_label)) return ESP_FAIL;
     JSValue fn_uptime_ms = JS_NewCFunctionParams(ctx, s_rt.func_idx_sys_time_uptime_ms, JS_UNDEFINED);
     if (JS_IsException(fn_uptime_ms)) return ESP_FAIL;
     JSValue fn_uptime_str = JS_NewCFunctionParams(ctx, s_rt.func_idx_sys_time_uptime_str, JS_UNDEFINED);
@@ -414,6 +442,7 @@ static esp_err_t bind_sys_and_timers(JSContext *ctx)
     if (JS_IsException(fn_clear_interval)) return ESP_FAIL;
 
     (void)JS_SetPropertyStr(ctx, ui, "setText", fn_set_text);
+    (void)JS_SetPropertyStr(ctx, ui, "createLabel", fn_create_label);
     (void)JS_SetPropertyStr(ctx, time, "uptimeMs", fn_uptime_ms);
     (void)JS_SetPropertyStr(ctx, time, "uptimeStr", fn_uptime_str);
     (void)JS_SetPropertyStr(ctx, sys, "log", fn_log);

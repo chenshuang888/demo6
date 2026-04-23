@@ -38,8 +38,9 @@
 页面：`app/pages/page_dynamic_app.c`
 
 - `create()`：
-  - 创建页面布局（包含一个可被 JS 更新的 Label）
-  - `dynamic_app_ui_register_label("time", label_obj)`
+  - 创建页面布局（包含一个纵向列表 root 容器，用于挂载脚本动态创建的 label）
+  - `dynamic_app_ui_set_root(list_root)`：设置脚本允许创建 label 的父容器（仅在 `PAGE_DYNAMIC_APP` 生命周期内）
+  - 脚本侧通过 `sys.ui.createLabel(id)` 自己创建/注册需要的 label
   - `dynamic_app_start()`：通知 Script Task 创建 JSContext、执行 `app.js`
 
 - `destroy()`：
@@ -52,6 +53,11 @@
 
 - `sys.log(msg)`
   - 映射到 `ESP_LOGI("dynapp", ...)`
+
+- `sys.ui.createLabel(id) -> boolean`
+  - **异步**：仅入队创建请求（fire-and-forget），实际创建发生在 UI Task 的 `dynamic_app_ui_drain()`
+  - **仅 `PAGE_DYNAMIC_APP` 生效**：页面 destroy 后（root 清空）会返回 false
+  - **幂等**：同 id 重复调用不会重复创建
 
 - `sys.ui.setText(id, text)`
   - **异步**：仅入队 UI 指令（fire-and-forget）

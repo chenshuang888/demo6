@@ -12,7 +12,12 @@
 
 sys.log("dynamic app started");
 
-// 页面刚进入时先写一次。
+// 页面刚进入时：脚本侧自己创建/注册 label（仅在 PAGE_DYNAMIC_APP 生效）
+if (sys && sys.ui && sys.ui.createLabel) {
+    sys.ui.createLabel("time");
+}
+
+// 初始化显示
 sys.ui.setText("time", sys.time.uptimeStr());
 
 setInterval(function () {
