@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -13,84 +14,109 @@ extern "C" {
 #endif
 
 /*
- * dynamic_app_ui：Script Task -> UI Task 的“安全桥接层”。
+ * dynamic_app_ui：Script Task <-> UI Task 双向桥接层。
  *
- * 目标：
- * - 让脚本线程可以发起 UI 更新（例如 setText），但又不直接触碰 LVGL。
+ * 单向（Script -> UI）命令队列 s_ui_queue：
+ *   脚本侧把 createLabel/createPanel/createButton/setText/setStyle/attachClick
+ *   等"要做什么"封装成 command，UI Task 在 dynamic_app_ui_drain() 出队执行。
  *
- * 手段：
- * - Script Task 只负责把“要做什么 UI 操作”封装成 command，塞进 FreeRTOS Queue；
- * - UI Task 在自己的循环里调用 `dynamic_app_ui_drain()`，逐条取出并执行（调用 LVGL API）。
+ * 反向（UI -> Script）事件队列 s_event_queue：
+ *   LVGL 点击回调里把 handler_id 入队；Script Task 在主循环里 pop 并 JS_Call。
  *
- * 线程规则（非常重要）：
- * - enqueue：可以在任意线程调用（典型是脚本线程）
- * - register/unregister/drain：必须在 UI 线程调用（因为涉及 LVGL 对象与 LVGL API）
+ * 线程规则：
+ * - enqueue_*：可在任意线程调用（典型是脚本线程）
+ * - register/unregister/drain/pop_event：必须在它们对应的所有者线程调用
  */
 
-#define DYNAMIC_APP_UI_ID_MAX_LEN   32
-#define DYNAMIC_APP_UI_TEXT_MAX_LEN 128
+#define DYNAMIC_APP_UI_ID_MAX_LEN     32
+#define DYNAMIC_APP_UI_TEXT_MAX_LEN   128
+#define DYNAMIC_APP_UI_REGISTRY_MAX   64
+#define DYNAMIC_APP_UI_EVENT_QUEUE_LEN 8
 
 typedef enum {
     DYNAMIC_APP_UI_CMD_SET_TEXT = 1,
-    DYNAMIC_APP_UI_CMD_CREATE_LABEL = 2,
+    DYNAMIC_APP_UI_CMD_CREATE_LABEL,
+    DYNAMIC_APP_UI_CMD_CREATE_PANEL,
+    DYNAMIC_APP_UI_CMD_CREATE_BUTTON,
+    DYNAMIC_APP_UI_CMD_SET_STYLE,
+    DYNAMIC_APP_UI_CMD_ATTACH_CLICK,
 } dynamic_app_ui_cmd_type_t;
+
+/*
+ * 样式 key：约定与 JS 侧 sys.style.* 数值常量对齐（dynamic_app.c 里绑定）。
+ * a/b/c/d 字段含义随 key 变化（详见 dynamic_app_ui.c drain 实现）。
+ */
+typedef enum {
+    DYNAMIC_APP_STYLE_BG_COLOR = 1,    /* a = 0xRRGGBB */
+    DYNAMIC_APP_STYLE_TEXT_COLOR,      /* a = 0xRRGGBB */
+    DYNAMIC_APP_STYLE_RADIUS,          /* a = px */
+    DYNAMIC_APP_STYLE_SIZE,            /* a = w, b = h；负数取 abs 当百分比 */
+    DYNAMIC_APP_STYLE_ALIGN,           /* a = align id, b = x, c = y */
+    DYNAMIC_APP_STYLE_PAD,              /* a/b/c/d = left/top/right/bottom */
+    DYNAMIC_APP_STYLE_BORDER_BOTTOM,   /* a = 0xRRGGBB */
+    DYNAMIC_APP_STYLE_FLEX,            /* a = 0(column) / 1(row) */
+    DYNAMIC_APP_STYLE_FONT,            /* a = 0(text) / 1(title) / 2(huge) */
+} dynamic_app_style_key_t;
 
 typedef struct {
     dynamic_app_ui_cmd_type_t type;
     char id[DYNAMIC_APP_UI_ID_MAX_LEN];
-    char text[DYNAMIC_APP_UI_TEXT_MAX_LEN];
+    union {
+        char text[DYNAMIC_APP_UI_TEXT_MAX_LEN];          /* SET_TEXT */
+        char parent_id[DYNAMIC_APP_UI_ID_MAX_LEN];        /* CREATE_* */
+        struct {
+            int32_t key;
+            int32_t a, b, c, d;
+        } style;                                          /* SET_STYLE */
+        uint32_t handler_id;                              /* ATTACH_CLICK */
+    } u;
 } dynamic_app_ui_command_t;
 
-/**
- * 初始化 UI 桥接层（创建队列、清空 registry）。
- *
- * @note 多次调用是安全的：已经初始化则直接返回 ESP_OK。
- */
+typedef struct {
+    uint32_t handler_id;   /* 1..MAX_CLICK_HANDLERS；0 保留为"无效" */
+} dynamic_app_ui_event_t;
+
+/* ---------------- 生命周期 ---------------- */
+
 esp_err_t dynamic_app_ui_init(void);
 
-/**
- * Script Task：异步请求 UI 把某个 id 对应的 label 文本更新为 text。
- *
- * 说明：
- * - 这里不会调用 LVGL；只是入队一条命令；
- * - id/text 会被拷贝进 command（并做 UTF-8 安全截断），因此调用结束后原指针可立即失效；
- * - 如果队列满了，会返回 false（MVP 阶段选择“丢弃”而不是阻塞 UI）。
- */
+void dynamic_app_ui_set_root(lv_obj_t *root);
+void dynamic_app_ui_unregister_all(void);
+void dynamic_app_ui_drain(int max_count);
+
+/* 由上层（page）在进入 Dynamic App 页面前注入字体指针。任意指针为 NULL 时
+ * 该字体对应的 setStyle(FONT, x) 将回退到 LVGL 默认字体。 */
+void dynamic_app_ui_set_fonts(const lv_font_t *text,
+                              const lv_font_t *title,
+                              const lv_font_t *huge);
+
+/* 旧 API：仍允许外部 C 侧手动注册 label，便于过渡期共存 */
+esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj);
+
+/* ---------------- Script -> UI ---------------- */
+
 bool dynamic_app_ui_enqueue_set_text(const char *id, size_t id_len,
                                      const char *text, size_t text_len);
 
-/**
- * Script Task：请求在 Dynamic App 页面内创建一个 label，并注册到 registry。
- *
- * @note 该函数只负责入队，不直接触碰 LVGL。真正创建发生在 UI Task 的 dynamic_app_ui_drain()。
- * @return true=成功入队；false=队列满/参数错误/当前不在 Dynamic App 页面（root 未设置）。
- */
-bool dynamic_app_ui_enqueue_create_label(const char *id, size_t id_len);
+/* parent_id 可为 NULL（落到 root）；len 同步 */
+bool dynamic_app_ui_enqueue_create_label(const char *id, size_t id_len,
+                                         const char *parent_id, size_t parent_len);
+bool dynamic_app_ui_enqueue_create_panel(const char *id, size_t id_len,
+                                         const char *parent_id, size_t parent_len);
+bool dynamic_app_ui_enqueue_create_button(const char *id, size_t id_len,
+                                          const char *parent_id, size_t parent_len);
 
-/**
- * UI Task：把一个 label 注册到 registry，让脚本可以通过 id 找到它。
- */
-esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj);
+bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
+                                      dynamic_app_style_key_t key,
+                                      int32_t a, int32_t b, int32_t c, int32_t d);
 
-/**
- * UI Task：设置/清空 Dynamic App 页面可挂载的 root 容器。
- *
- * @note 为了保证“只允许在 PAGE_DYNAMIC_APP 创建”，root 只在该页面 create 时设置，
- *       destroy 时清空。root==NULL 时会丢弃 CREATE_LABEL 命令。
- */
-void dynamic_app_ui_set_root(lv_obj_t *root);
+bool dynamic_app_ui_enqueue_attach_click(const char *id, size_t id_len,
+                                         uint32_t handler_id);
 
-/**
- * UI Task：清空所有 registry 项。
- */
-void dynamic_app_ui_unregister_all(void);
+/* ---------------- UI -> Script ---------------- */
 
-/**
- * UI Task：消费队列并执行命令。
- *
- * @param max_count 本次最多处理的命令条数（控制每一帧的耗时）
- */
-void dynamic_app_ui_drain(int max_count);
+bool dynamic_app_ui_pop_event(dynamic_app_ui_event_t *out);
+void dynamic_app_ui_clear_event_queue(void);
 
 #ifdef __cplusplus
 }

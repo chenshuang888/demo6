@@ -37,8 +37,8 @@ static void ui_task(void *arg)
          * 放在 page_router_update/lvgl_port_task_handler 之前的原因：
          * - 尽量让“这一帧收到的更新”能在同一帧渲染出来，减少肉眼可见的延迟。
          */
-        /* Script -> UI 队列桥：先 drain 再跑页面 update/渲染，避免“这一帧改了下一帧才显示” */
-        dynamic_app_ui_drain(4);
+        /* Script -> UI 队列桥：每帧消化较多命令，避免脚本一次性 build UI 时被丢弃 */
+        dynamic_app_ui_drain(32);
 
         time_manager_process_pending();
         weather_manager_process_pending();

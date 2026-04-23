@@ -1,28 +1,74 @@
-// Dynamic App MVP (MicroQuickJS)
+// Dynamic App MVP (MicroQuickJS) —— Layer1 widget + Layer2 onClick
 //
-// 这是一段“演示脚本”，目的是让你快速看到整条链路是否跑通：
-// - JS 运行在 Script Task（脚本任务）里；
-// - JS 通过 sys.ui.setText() 把“更新 UI 的请求”发给 C 代码（入队）；
-// - UI Task 在自己的循环里 drain 队列，再真正调用 LVGL 更新 label。
+// 目标：在 dynamic_app 页面里 1:1 复刻"菜单页"的卡片+列表项视觉。
+// 所有 UI 操作均通过 sys.ui.* 异步入队，UI 线程 drain 时调用 LVGL。
 //
-// 你在这里会用到的内置 API（由 C 侧提供）：
-// - sys.log(msg)：输出日志
-// - sys.time.uptimeStr()：返回运行时长字符串（HH:MM:SS）
-// - sys.ui.setText(id, text)：把某个 label 的文本更新请求发给 UI 线程（异步）
+// 注意：esp-mquickjs 仅支持 ES5，不要用 const/let/arrow function。
 
-sys.log("dynamic app started");
+var Style = sys.style;
+var Align = sys.align;
+var Font  = sys.font;
+var Sym   = sys.symbols;
 
-// 页面刚进入时：脚本侧自己创建/注册 label（仅在 PAGE_DYNAMIC_APP 生效）
-if (sys && sys.ui && sys.ui.createLabel) {
-    sys.ui.createLabel("time");
+// 颜色（与 page_menu.c 保持一致）
+var COLOR_CARD     = 0x2D2640;
+var COLOR_CARD_ALT = 0x3A3354;
+var COLOR_ACCENT   = 0x06B6D4;
+var COLOR_TEXT     = 0xF1ECFF;
+
+sys.log("dynamic app: building menu-like UI");
+
+// ---------- helpers ----------
+function panel(id, parent)  { sys.ui.createPanel(id, parent || null);  return id; }
+function button(id, parent) { sys.ui.createButton(id, parent || null); return id; }
+function label(id, parent, text) {
+    sys.ui.createLabel(id, parent || null);
+    if (text !== undefined) sys.ui.setText(id, text);
+    return id;
+}
+function st(id, key, a, b, c, d) {
+    sys.ui.setStyle(id, key,
+        a | 0,
+        b === undefined ? 0 : (b | 0),
+        c === undefined ? 0 : (c | 0),
+        d === undefined ? 0 : (d | 0));
 }
 
-// 初始化显示
-sys.ui.setText("time", sys.time.uptimeStr());
+function makeItem(parent, id, icon, text) {
+    var item = button(id, parent);
+    // 高 50px、宽 100%（用 -100 表示 lv_pct(100)）
+    st(item, Style.SIZE, -100, 50);
+    st(item, Style.BORDER_BOTTOM, COLOR_CARD_ALT);
 
-setInterval(function () {
-    // 1Hz 更新，屏幕上应该能看到每秒变化（并且串口日志会不断输出 tick）。
-    var s = sys.time.uptimeStr();
-    sys.ui.setText("time", s);
-    sys.log("tick " + s);
-}, 1000);
+    var ic = label(id + "_ic", item, icon);
+    st(ic, Style.TEXT_COLOR, COLOR_ACCENT);
+    st(ic, Style.FONT, Font.TITLE);
+    st(ic, Style.ALIGN, Align.LEFT_MID, 14, 0);
+
+    var tx = label(id + "_t", item, text);
+    st(tx, Style.TEXT_COLOR, COLOR_TEXT);
+    st(tx, Style.FONT, Font.TEXT);
+    st(tx, Style.ALIGN, Align.LEFT_MID, 48, 0);
+
+    sys.ui.onClick(item, (function (cid) {
+        return function () { sys.log("click " + cid); };
+    })(id));
+    return item;
+}
+
+// ---------- 卡片 + 7 个列表项 ----------
+var card = panel("card", null);
+st(card, Style.SIZE, -100, -100);
+st(card, Style.BG_COLOR, COLOR_CARD);
+st(card, Style.RADIUS, 12);
+st(card, Style.FLEX, 0);   // 0 = column
+
+makeItem(card, "bt", Sym.BLUETOOTH, "Bluetooth");
+makeItem(card, "bl", Sym.EYE_OPEN,  "Backlight");
+makeItem(card, "tm", Sym.SETTINGS,  "Time & Date");
+makeItem(card, "wt", Sym.IMAGE,     "Weather");
+makeItem(card, "nt", Sym.BELL,      "Notifications");
+makeItem(card, "ms", Sym.AUDIO,     "Music");
+makeItem(card, "sy", Sym.BARS,      "System");
+
+sys.log("dynamic app: build done");

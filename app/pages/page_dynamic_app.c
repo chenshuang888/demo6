@@ -2,6 +2,7 @@
 
 #include "app_fonts.h"
 #include "dynamic_app.h"
+#include "dynamic_app_ui.h"
 #include "esp_log.h"
 #include "lvgl.h"
 
@@ -77,30 +78,19 @@ static void create_top_bar(void)
 
 static void create_body(void)
 {
-    /* 提示文字：解释“脚本线程不直接操作 LVGL”的原则。 */
-    lv_obj_t *hint = lv_label_create(s_ui.screen);
-    lv_label_set_text(hint, "JS 通过队列异步更新 UI（脚本线程不直接操作 LVGL）");
-    lv_obj_set_style_text_color(hint, lv_color_hex(COLOR_MUTED), 0);
-    lv_obj_set_style_text_font(hint, APP_FONT_TEXT, 0);
-    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(hint, lv_pct(100));
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
-
     /*
-     * 动态 App 的“纵向列表”根容器：
-     * - 脚本调用 sys.ui.createLabel(id) 时，UI 线程会在该 root 下创建 label，并注册到 registry；
-     * - 后续脚本可通过 sys.ui.setText(id, text) 更新对应 label 的文本。
+     * 动态 App 的根容器：
+     * - 脚本调用 sys.ui.createPanel/Label/Button(id, parent) 时，UI 线程
+     *   会在该 root（或脚本传的 parent）下创建对象并注册到 registry；
+     * - 脚本可后续通过 sys.ui.setText / setStyle / onClick 操作之。
+     *
+     * 注意：该容器自身保留滚动行为，便于脚本铺超过可视高度的内容。
      */
     s_ui.list_root = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(s_ui.list_root);
-    lv_obj_set_size(s_ui.list_root, 220, 220);
-    lv_obj_align(s_ui.list_root, LV_ALIGN_TOP_MID, 0, 56);
-    lv_obj_set_flex_flow(s_ui.list_root, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(s_ui.list_root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_size(s_ui.list_root, 220, 250);
+    lv_obj_align(s_ui.list_root, LV_ALIGN_TOP_MID, 0, 50);
     lv_obj_set_style_pad_all(s_ui.list_root, 0, 0);
-    lv_obj_set_style_pad_row(s_ui.list_root, 8, 0);
-    lv_obj_set_style_pad_column(s_ui.list_root, 0, 0);
     lv_obj_set_style_text_color(s_ui.list_root, lv_color_hex(COLOR_TEXT), 0);
     lv_obj_set_style_text_font(s_ui.list_root, APP_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(s_ui.list_root, LV_OPA_TRANSP, 0);
@@ -125,6 +115,9 @@ static void page_init(void)
     create_top_bar();
     create_body();
     bind_events();
+
+    /* 把 app 层的字体指针注入桥接层，脚本通过 sys.font.{TEXT,TITLE,HUGE} 选用 */
+    dynamic_app_ui_set_fonts(APP_FONT_TEXT, APP_FONT_TITLE, APP_FONT_HUGE);
 
     /* 只允许在 PAGE_DYNAMIC_APP 创建 UI：root 只在本页面生命周期内有效 */
     dynamic_app_ui_set_root(s_ui.list_root);
