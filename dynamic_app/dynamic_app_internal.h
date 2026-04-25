@@ -31,7 +31,6 @@ extern "C" {
 
 #define JS_HEAP_SIZE_BYTES   (1024 * 1024)   /* JS 堆固定 1MB（PSRAM） */
 #define MAX_INTERVALS        8                /* setInterval 槽位数 */
-#define MAX_CLICK_HANDLERS   16               /* sys.ui.onClick 槽位数 */
 
 #define NOTIFY_START         (1u << 0)        /* TaskNotify bit：启动脚本 */
 #define NOTIFY_STOP          (1u << 1)        /* TaskNotify bit：停止脚本 */
@@ -47,12 +46,6 @@ typedef struct {
     int64_t next_ms;
     int interval_ms;
 } js_interval_t;
-
-/* sys.ui.onClick 注册槽：handler_id = slot+1（0 保留为"无效"） */
-typedef struct {
-    bool allocated;
-    JSGCRef func;
-} js_click_handler_t;
 
 /* JS 运行时全局状态。整个 dynamic_app 模块只有一个实例：s_rt。 */
 typedef struct {
@@ -70,11 +63,10 @@ typedef struct {
     size_t cfunc_table_count;
     JSSTDLibraryDef stdlib_def;
 
-    /* 回调注册表 */
+    /* setInterval 注册表 */
     js_interval_t intervals[MAX_INTERVALS];
-    js_click_handler_t handlers[MAX_CLICK_HANDLERS];
 
-    /* Phase 3: delegation 路径的 JS 分发函数。由 sys.__setDispatcher 注册。
+    /* root delegation 路径的 JS 分发函数。由 sys.__setDispatcher 注册。
      * 用 GCRef 钉住防 GC，teardown 时释放。allocated=false 表示未注册。 */
     bool dispatcher_allocated;
     JSGCRef dispatcher;
@@ -88,7 +80,6 @@ typedef struct {
     int func_idx_sys_ui_create_panel;
     int func_idx_sys_ui_create_button;
     int func_idx_sys_ui_set_style;
-    int func_idx_sys_ui_on_click;
     int func_idx_sys_ui_attach_root_listener;
     int func_idx_sys_set_dispatcher;
     int func_idx_sys_time_uptime_ms;
@@ -140,10 +131,9 @@ int64_t dynamic_app_next_interval_deadline_ms(int64_t cur_ms);
 /* 消化"UI → Script"反向事件队列里所有点击事件 */
 void dynamic_app_drain_ui_events_once(JSContext *ctx);
 
-/* 释放所有 setInterval / onClick 槽位的 GCRef。
+/* 释放所有 setInterval 槽位的 GCRef。
  * runtime.c 的 teardown 调用，避免泄漏。 */
 void dynamic_app_intervals_reset(JSContext *ctx);
-void dynamic_app_click_handlers_reset(JSContext *ctx);
 
 #ifdef __cplusplus
 }

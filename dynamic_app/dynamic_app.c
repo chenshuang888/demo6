@@ -107,9 +107,8 @@ static void script_task(void *arg)
 
         ESP_LOGI(TAG, "starting dynamic app");
 
-        /* 每次启动都彻底清零回调表（避免上次 stop 残留） */
+        /* 每次启动都彻底清零 interval 表（避免上次 stop 残留） */
         memset(s_rt.intervals, 0, sizeof(s_rt.intervals));
-        memset(s_rt.handlers,  0, sizeof(s_rt.handlers));
         s_rt.app_running = true;
 
         /* ——— 三步走：setup → bind → eval ——— */

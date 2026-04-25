@@ -1,17 +1,16 @@
-// Dynamic App —— Timers 页面 (Phase 3: VDOM + Root Delegation)
+// Dynamic App —— Timers 页面（VDOM + Root Delegation）
 //
 // 本文件分两段：
-//   §1. VDOM 框架（通用，可复用）—— Phase 3: 真·事件委托
+//   §1. VDOM 框架（通用，可复用）
 //   §2. Timers 业务（用 VDOM 写）
 //
 // 设计原则：
 //   - VDOM 节点 = { type, props, children, _parent }，靠 props.id 寻址
-//   - Phase 3 增量：在最外层 root container 调一次 sys.ui.attachRootListener
-//     之后所有子按钮的点击都由 LVGL 冒泡到 root，C 侧的 on_lv_root_click
-//     拿到被点对象的 id 字符串，通过事件队列回到 JS 侧的全局
-//     __dynapp_dispatch(id) 函数；__dynapp_dispatch 调用 VDOM.dispatch
-//     从该节点向上冒泡触发 onClick 链。
-//   - 子节点不再调 sys.ui.onClick —— 0 次 native 注册（除 root 那一次）。
+//   - 在最外层 root container 调一次 sys.ui.attachRootListener，之后
+//     所有子按钮的点击都由 LVGL 冒泡到 root，C 侧的 on_lv_root_click
+//     拿到被点对象的 id 字符串，通过事件队列回到 JS 侧由 dispatcher
+//     沿 _parent 链上爬触发 onClick。
+//   - 整页只挂 1 次 native cb；子节点都不调 sys.ui.* 的事件 API。
 //   - 状态变化 → 显式调 vdom.set(id, partialProps)
 //
 // 约束：esp-mquickjs 仅支持 ES5。
@@ -88,18 +87,13 @@ var VDOM = (function () {
         }
     }
 
-    // ---- 事件冒泡 dispatcher（Phase 2 核心） ----
+    // ---- 事件冒泡 dispatcher ----
     //
-    //   流程：用户点击 LVGL 对象 → C 侧 on_lv_click → JS 侧 trampoline
-    //         → dispatch(targetId)：从 target 沿 _parent 链上爬
-    //         → 每经过一个 vnode 检查 props.onClick，存在则调用
+    //   流程：用户点击 LVGL 对象 → root listener 入队 node_id
+    //         → C drain 调 dispatcher → dispatch(targetId)
+    //         → 从 target 沿 _parent 链上爬，每经过一个 vnode 检查 props.onClick
     //         → handler 收到 event 对象 { target, currentTarget, stopPropagation() }
     //         → handler 返回 false 或调 e.stopPropagation() 终止冒泡
-    //
-    //   注意：native 侧仍然是一对一注册（每个有 onClick 的节点 attach 一次），
-    //   所以"父节点想收子节点点击"的前提是：父节点本身得是可点击控件 + 有 onClick prop。
-    //   纯文本/纯容器（panel）目前在 LVGL 里默认不响应点击 —— 真正的"零 attach
-    //   也能冒泡"要等 Phase 3 加 root delegation 才能完全实现。
     function dispatch(startId) {
         var node = nodes[startId];
         if (!node) return;
@@ -134,9 +128,8 @@ var VDOM = (function () {
 
         if (node.props.text !== undefined) sys.ui.setText(id, "" + node.props.text);
         applyStyle(id, node.props);
-        // Phase 3: 不再为每个有 onClick 的节点调 sys.ui.onClick。
-        // 事件统一由 root listener 捕获 + 全局 __dynapp_dispatch 派发。
-        // VDOM 自己会在 dispatch 时遍历到该节点的 props.onClick。
+        // 不为每个有 onClick 的节点单独 attach。事件统一由 root listener
+        // 捕获，dispatcher 沿 _parent 链遍历到该节点的 props.onClick。
 
         nodes[id] = node;
         node._mounted = true;
@@ -170,7 +163,7 @@ var VDOM = (function () {
     return { h: h, mount: mount, find: find, set: set, dispatch: dispatch };
 })();
 
-// Phase 3: 把 dispatcher 注册给 C 侧（GCRef 持有）。
+// 把 dispatcher 注册给 C 侧（GCRef 持有）。
 // 选这种方式是因为 esp-mquickjs 顶层 `this` 为 undefined，拿不到全局对象。
 sys.__setDispatcher(function (id) { VDOM.dispatch(id); });
 
@@ -421,7 +414,7 @@ VDOM.mount(
     "appRoot"
 );
 
-// Phase 3: 一次性挂载 root listener，所有按钮点击通过这条总干线回到 JS。
+// 一次性挂载 root listener，所有按钮点击通过这条总干线回到 JS。
 sys.ui.attachRootListener("appRoot");
 
 // 初始化显示

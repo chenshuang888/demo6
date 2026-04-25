@@ -120,7 +120,6 @@ int registry_alloc(const char *id, ui_obj_type_t type, lv_obj_t *obj)
             s_registry[i].used = true;
             s_registry[i].type = type;
             s_registry[i].obj = obj;
-            s_registry[i].click_handler_id = 0;
             strncpy(s_registry[i].id, id, sizeof(s_registry[i].id) - 1);
             s_registry[i].id[sizeof(s_registry[i].id) - 1] = '\0';
             return i;

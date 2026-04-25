@@ -5,9 +5,10 @@
  *   把 C 系统能力翻译成 JS 函数。所有 JS 脚本能调到的 sys.xxx 都在这里实现。
  *
  * 文件目录：
- *   §1. 通用 helper（参数解析、id/parent 提取、回调表 reset）
+ *   §1. 通用 helper（参数解析、id/parent 提取、interval 表 reset）
  *   §2. JS Native：sys.log
- *   §3. JS Native：sys.ui.*  （setText/createLabel/createPanel/createButton/setStyle/onClick）
+ *   §3. JS Native：sys.ui.*  （setText/createLabel/createPanel/createButton/
+ *                              setStyle/attachRootListener/__setDispatcher）
  *   §4. JS Native：sys.time.* （uptimeMs/uptimeStr）
  *   §5. JS Native：setInterval / clearInterval
  *   §6. tick 循环服务（run_intervals_once / drain_ui_events_once / next_deadline）
@@ -70,23 +71,13 @@ static bool extract_parent_id(JSContext *ctx, JSValue v,
     return true;
 }
 
-/* setInterval / onClick 注册的 GCRef 在 teardown 时统一释放。 */
+/* setInterval 注册的 GCRef 在 teardown 时统一释放。 */
 void dynamic_app_intervals_reset(JSContext *ctx)
 {
     for (int i = 0; i < MAX_INTERVALS; i++) {
         if (s_rt.intervals[i].allocated) {
             JS_DeleteGCRef(ctx, &s_rt.intervals[i].func);
             s_rt.intervals[i].allocated = false;
-        }
-    }
-}
-
-void dynamic_app_click_handlers_reset(JSContext *ctx)
-{
-    for (int i = 0; i < MAX_CLICK_HANDLERS; i++) {
-        if (s_rt.handlers[i].allocated) {
-            JS_DeleteGCRef(ctx, &s_rt.handlers[i].func);
-            s_rt.handlers[i].allocated = false;
         }
     }
 }
@@ -221,55 +212,12 @@ static JSValue js_sys_ui_set_style(JSContext *ctx, JSValue *this_val, int argc, 
     return JS_NewBool(ok ? 1 : 0);
 }
 
-/* sys.ui.onClick(id, fn)
- *
- *   1. 在 s_rt.handlers[] 找空 slot
- *   2. JS_AddGCRef 钉住 JS 函数（防 GC）
- *   3. handler_id = slot+1（0 保留为"无"，便于 lv_event user_data 区分）
- *   4. enqueue ATTACH_CLICK，让 UI 线程调 lv_obj_add_event_cb
- *   5. 入队失败时回滚 GCRef
- */
-static JSValue js_sys_ui_on_click(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-    if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "sys.ui.onClick(id, fn) args missing");
-    }
-    if (!JS_IsFunction(ctx, argv[1])) {
-        return JS_ThrowTypeError(ctx, "sys.ui.onClick: not a function");
-    }
-
-    JSCStringBuf id_buf;
-    size_t id_len = 0;
-    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
-    if (!id) return JS_EXCEPTION;
-
-    int slot = -1;
-    for (int i = 0; i < MAX_CLICK_HANDLERS; i++) {
-        if (!s_rt.handlers[i].allocated) { slot = i; break; }
-    }
-    if (slot < 0) {
-        return JS_ThrowInternalError(ctx, "too many click handlers");
-    }
-
-    JSValue *pfunc = JS_AddGCRef(ctx, &s_rt.handlers[slot].func);
-    *pfunc = argv[1];
-    s_rt.handlers[slot].allocated = true;
-
-    uint32_t hid = (uint32_t)(slot + 1);
-    if (!dynamic_app_ui_enqueue_attach_click(id, id_len, hid)) {
-        JS_DeleteGCRef(ctx, &s_rt.handlers[slot].func);
-        s_rt.handlers[slot].allocated = false;
-        return JS_NewBool(0);
-    }
-    return JS_NewBool(1);
-}
-
 /* sys.ui.attachRootListener(id)
  *
- *   Phase 3 事件委托入口：在指定 id 对象上挂一个 LVGL cb。
+ *   事件委托入口：在指定 id 对象上挂一个 LVGL cb。
  *   之后所有冒泡到该对象的 LV_EVENT_CLICKED，都会被 on_lv_root_click 捕获，
- *   然后以"被点中真子对象的 id"为 payload 入队，由 JS 全局 __dynapp_dispatch 派发。
+ *   然后以"被点中真子对象的 id"为 payload 入队，由 sys.__setDispatcher
+ *   注册的 JS 函数派发。
  *   不持有 JS 函数引用 —— dispatcher 是脚本侧的全局函数。
  */
 static JSValue js_sys_ui_attach_root_listener(JSContext *ctx, JSValue *this_val,
@@ -291,7 +239,7 @@ static JSValue js_sys_ui_attach_root_listener(JSContext *ctx, JSValue *this_val,
 /* sys.__setDispatcher(fn)
  *
  *   JS 侧注册一个全局 dispatcher 函数，C 侧用 GCRef 持有。
- *   之后所有 delegation 路径的点击都通过这个 fn 派发，C 侧不再需要
+ *   所有 root delegation 路径的点击都通过这个 fn 派发，C 侧不需要
  *   反查 globalThis.__dynapp_dispatch（esp-mquickjs 顶层 this 为 undefined，
  *   那条路走不通）。teardown 时 GCRef 一起释放，不泄漏。
  *   重复调用时，先释放旧的再记录新的。
@@ -446,55 +394,33 @@ void dynamic_app_drain_ui_events_once(JSContext *ctx)
 {
     /* 每 tick 最多消 8 个点击事件，避免大量回调阻塞主循环。
      *
-     * 两条路径共存：
-     *   1) handler_id > 0  → Phase 1/2 一对一 onClick：从 handlers 表取函数调用
-     *   2) node_id[0] != 0 → Phase 3 delegation：把 id 作为字符串参数
-     *                         传给 JS 全局 __dynapp_dispatch(id)（脚本侧定义）
+     * root delegation 路径：
+     *   on_lv_root_click 把"被点中对象的 id"放进 ev.node_id 入队，
+     *   这里把 id 作为字符串参数传给 sys.__setDispatcher 注册的 JS 函数。
      */
     int budget = 8;
     dynamic_app_ui_event_t ev;
     while (budget-- > 0 && dynamic_app_ui_pop_event(&ev)) {
+        if (ev.node_id[0] == '\0') continue;
+        if (!s_rt.dispatcher_allocated) continue;
 
-        if (ev.handler_id != 0) {
-            if (ev.handler_id > MAX_CLICK_HANDLERS) continue;
-            js_click_handler_t *h = &s_rt.handlers[ev.handler_id - 1];
-            if (!h->allocated) continue;
-
-            if (JS_StackCheck(ctx, 2)) {
-                dynamic_app_dump_exception(ctx);
-                return;
-            }
-            JS_PushArg(ctx, h->func.val);
-            JS_PushArg(ctx, JS_NULL);
-            JSValue ret = JS_Call(ctx, 0);
-            if (JS_IsException(ret)) {
-                dynamic_app_dump_exception(ctx);
-            }
-            continue;
+        /* 用 GCRef 持有 fn，避开"esp-mquickjs 顶层 this 为 undefined
+         * 拿不到全局对象"的问题。
+         *
+         * esp-mquickjs 栈约定（见 managed_components/.../example.c::js_rectangle_call）：
+         *   push 顺序：argN ... arg1, fn, this  （从栈底到栈顶）
+         *   栈顶是 this，往下 fn，再往下是参数。 */
+        if (JS_StackCheck(ctx, 3)) {
+            dynamic_app_dump_exception(ctx);
+            return;
         }
-
-        if (ev.node_id[0] != '\0') {
-            /* delegation：调用 sys.__setDispatcher 注册过的 JS 函数。
-             * 用 GCRef 持有 fn，避开"esp-mquickjs 顶层 this 为 undefined
-             * 拿不到全局对象"的问题。
-             *
-             * esp-mquickjs 栈约定（见 managed_components/.../example.c::js_rectangle_call）：
-             *   push 顺序：argN ... arg1, fn, this  （从栈底到栈顶）
-             *   栈顶是 this，往下 fn，再往下是参数。 */
-            if (!s_rt.dispatcher_allocated) continue;
-
-            if (JS_StackCheck(ctx, 3)) {
-                dynamic_app_dump_exception(ctx);
-                return;
-            }
-            JSValue arg = JS_NewString(ctx, ev.node_id);
-            JS_PushArg(ctx, arg);                    /* arg1 先 push（最深） */
-            JS_PushArg(ctx, s_rt.dispatcher.val);    /* fn */
-            JS_PushArg(ctx, JS_NULL);                /* this 最后 push（栈顶） */
-            JSValue ret = JS_Call(ctx, 1);
-            if (JS_IsException(ret)) {
-                dynamic_app_dump_exception(ctx);
-            }
+        JSValue arg = JS_NewString(ctx, ev.node_id);
+        JS_PushArg(ctx, arg);                    /* arg1 先 push（最深） */
+        JS_PushArg(ctx, s_rt.dispatcher.val);    /* fn */
+        JS_PushArg(ctx, JS_NULL);                /* this 最后 push（栈顶） */
+        JSValue ret = JS_Call(ctx, 1);
+        if (JS_IsException(ret)) {
+            dynamic_app_dump_exception(ctx);
         }
     }
 }
@@ -530,13 +456,12 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_ui_create_panel         = (int)base_count + 3;
     rt->func_idx_sys_ui_create_button        = (int)base_count + 4;
     rt->func_idx_sys_ui_set_style            = (int)base_count + 5;
-    rt->func_idx_sys_ui_on_click             = (int)base_count + 6;
-    rt->func_idx_sys_ui_attach_root_listener = (int)base_count + 7;
-    rt->func_idx_sys_set_dispatcher          = (int)base_count + 8;
-    rt->func_idx_sys_time_uptime_ms          = (int)base_count + 9;
-    rt->func_idx_sys_time_uptime_str         = (int)base_count + 10;
-    rt->func_idx_set_interval                = (int)base_count + 11;
-    rt->func_idx_clear_interval              = (int)base_count + 12;
+    rt->func_idx_sys_ui_attach_root_listener = (int)base_count + 6;
+    rt->func_idx_sys_set_dispatcher          = (int)base_count + 7;
+    rt->func_idx_sys_time_uptime_ms          = (int)base_count + 8;
+    rt->func_idx_sys_time_uptime_str         = (int)base_count + 9;
+    rt->func_idx_set_interval                = (int)base_count + 10;
+    rt->func_idx_clear_interval              = (int)base_count + 11;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -545,7 +470,6 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_ui_create_panel,         js_sys_ui_create_panel,         2);
     DEF_CFN(func_idx_sys_ui_create_button,        js_sys_ui_create_button,        2);
     DEF_CFN(func_idx_sys_ui_set_style,            js_sys_ui_set_style,            6);
-    DEF_CFN(func_idx_sys_ui_on_click,             js_sys_ui_on_click,             2);
     DEF_CFN(func_idx_sys_ui_attach_root_listener, js_sys_ui_attach_root_listener, 1);
     DEF_CFN(func_idx_sys_set_dispatcher,          js_sys_set_dispatcher,          1);
     DEF_CFN(func_idx_sys_time_uptime_ms,          js_sys_time_uptime_ms,          0);
@@ -591,7 +515,6 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(ui, "createPanel",        func_idx_sys_ui_create_panel);
     BIND_FN(ui, "createButton",       func_idx_sys_ui_create_button);
     BIND_FN(ui, "setStyle",           func_idx_sys_ui_set_style);
-    BIND_FN(ui, "onClick",            func_idx_sys_ui_on_click);
     BIND_FN(ui, "attachRootListener", func_idx_sys_ui_attach_root_listener);
 
     /* sys.time.* */

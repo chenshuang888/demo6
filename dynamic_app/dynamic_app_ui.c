@@ -4,8 +4,8 @@
  * 职责：
  *   1. 持有共享全局状态（s_ui_queue / s_event_queue / s_root / s_registry / fonts）
  *   2. 接收脚本入队的命令（enqueue_*）
- *   3. UI Task 主循环里 drain 命令并分发：CREATE / SET_TEXT / SET_STYLE / ATTACH_CLICK
- *   4. 反向事件入队（on_lv_click）+ 出队（pop_event）
+ *   3. UI Task 主循环里 drain 命令并分发：CREATE / SET_TEXT / SET_STYLE / ATTACH_ROOT_LISTENER
+ *   4. 反向事件入队（on_lv_root_click）+ 出队（pop_event）
  *   5. 生命周期：init / set_root / set_fonts / unregister_all / clear_event_queue
  *
  * 不做的事：
@@ -46,29 +46,6 @@ ui_registry_entry_t  s_registry[DYNAMIC_APP_UI_REGISTRY_MAX];
 const lv_font_t *s_font_text  = NULL;
 const lv_font_t *s_font_title = NULL;
 const lv_font_t *s_font_huge  = NULL;
-
-/* 旧的"上层注册一个 label"路径（label 自注册之前的兼容 API） */
-esp_err_t dynamic_app_ui_register_label(const char *id, lv_obj_t *obj)
-{
-    if (!id || id[0] == '\0' || !obj) return ESP_ERR_INVALID_ARG;
-    if (!lv_obj_is_valid(obj)) return ESP_ERR_INVALID_STATE;
-    if (!lv_obj_has_class(obj, &lv_label_class)) {
-        ESP_LOGE(TAG, "register failed: obj is not label (id=%s)", id);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    int slot = registry_find(id);
-    if (slot >= 0) {
-        s_registry[slot].obj = obj;
-        s_registry[slot].type = UI_OBJ_LABEL;
-        return ESP_OK;
-    }
-    if (registry_alloc(id, UI_OBJ_LABEL, obj) < 0) {
-        ESP_LOGE(TAG, "UI registry full");
-        return ESP_ERR_NO_MEM;
-    }
-    return ESP_OK;
-}
 
 /* ============================================================================
  * §2. 生命周期
@@ -193,20 +170,6 @@ bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
     return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
 }
 
-bool dynamic_app_ui_enqueue_attach_click(const char *id, size_t id_len,
-                                         uint32_t handler_id)
-{
-    if (!s_ui_queue || !id || handler_id == 0) return false;
-
-    dynamic_app_ui_command_t cmd = {0};
-    cmd.type = DYNAMIC_APP_UI_CMD_ATTACH_CLICK;
-    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
-    cmd.u.handler_id = handler_id;
-
-    if (cmd.id[0] == '\0') return false;
-    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
-}
-
 bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len)
 {
     if (!s_ui_queue || !id) return false;
@@ -222,24 +185,12 @@ bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len)
 /* ============================================================================
  * §5. UI→Script 反向事件
  *
- *   on_lv_click 在 LVGL UI 线程上下文执行：绝不能 JS_Call，只能入队。
+ *   on_lv_root_click 在 LVGL UI 线程上下文执行：绝不能 JS_Call，只能入队。
  *   pop_event 由 Script Task 主循环调用。
  *
- *   Phase 3：新增 on_lv_root_click —— 用于 ATTACH_ROOT_LISTENER 路径。
  *   点击沿 LVGL 父链冒泡到 root，cb 里用 lv_event_get_target 拿到被点
  *   的真正子对象，反查 registry 得到 node_id 字符串，一起入队。
  * ========================================================================= */
-
-static void on_lv_click(lv_event_t *e)
-{
-    uint32_t handler_id = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
-    if (handler_id == 0 || !s_event_queue) return;
-
-    dynamic_app_ui_event_t ev = {0};
-    ev.handler_id = handler_id;
-    /* 队列满则丢弃，绝不阻塞 LVGL 调度 */
-    (void)xQueueSend(s_event_queue, &ev, 0);
-}
 
 static void on_lv_root_click(lv_event_t *e)
 {
@@ -255,7 +206,6 @@ static void on_lv_root_click(lv_event_t *e)
     if (slot < 0) return;   /* 非 registry 管辖的对象，忽略 */
 
     dynamic_app_ui_event_t ev = {0};
-    ev.handler_id = 0;   /* 走 delegation 路径，handler_id 不用 */
     strncpy(ev.node_id, s_registry[slot].id, sizeof(ev.node_id) - 1);
     ev.node_id[sizeof(ev.node_id) - 1] = '\0';
 
@@ -280,11 +230,11 @@ void dynamic_app_ui_clear_event_queue(void)
  *   被 UI 线程主循环（app_main.c）周期性调用。
  *   每次最多消 max_count 条命令，避免长时间阻塞 LVGL 渲染。
  *
- *   分发 6 条路径：
+ *   分发 5 条路径：
  *     CREATE_LABEL / PANEL / BUTTON → do_create()
- *     SET_TEXT      → 查 registry → lv_label_set_text
- *     SET_STYLE     → 查 registry → apply_style()  [styles.c]
- *     ATTACH_CLICK  → 查 registry → lv_obj_add_event_cb(on_lv_click)
+ *     SET_TEXT             → 查 registry → lv_label_set_text
+ *     SET_STYLE            → 查 registry → apply_style()  [styles.c]
+ *     ATTACH_ROOT_LISTENER → 查 registry → lv_obj_add_event_cb(on_lv_root_click)
  * ========================================================================= */
 
 /* 创建 LVGL 对象并入 registry。返回 0 = 成功。 */
@@ -345,10 +295,9 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
 
     if (!obj) return -3;
 
-    /* Phase 3: 默认开启事件冒泡，让 click 能传到 root listener。
+    /* 默认开启事件冒泡，让 click 能传到 root listener。
      * LVGL 默认 EVENT_BUBBLE 关闭 —— 子对象的事件不会触发父级 cb。
-     * 我们这里统一开启，这样无论有没有 attachRootListener 都不影响功能；
-     * 一对一 onClick 路径下，handler_id 直接绑在该 obj 上，冒泡不影响触发。 */
+     * 我们这里统一开启，root listener 才能收到所有子按钮的点击。 */
     lv_obj_add_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     if (registry_alloc(cmd->id, type, obj) < 0) {
@@ -405,25 +354,6 @@ void dynamic_app_ui_drain(int max_count)
                     break;
                 }
                 apply_style(obj, &cmd);   /* → styles.c */
-                break;
-            }
-
-            case DYNAMIC_APP_UI_CMD_ATTACH_CLICK: {
-                int slot = registry_find(cmd.id);
-                if (slot < 0) break;
-                lv_obj_t *obj = s_registry[slot].obj;
-                if (!obj || !lv_obj_is_valid(obj)) {
-                    s_registry[slot].obj = NULL;
-                    break;
-                }
-                if (s_registry[slot].click_handler_id != 0) {
-                    /* 首版禁止重复绑定，避免 GCRef 泄漏 */
-                    ESP_LOGW(TAG, "onClick already bound on id=%s, ignore", cmd.id);
-                    break;
-                }
-                lv_obj_add_event_cb(obj, on_lv_click, LV_EVENT_CLICKED,
-                                    (void *)(uintptr_t)cmd.u.handler_id);
-                s_registry[slot].click_handler_id = cmd.u.handler_id;
                 break;
             }
 

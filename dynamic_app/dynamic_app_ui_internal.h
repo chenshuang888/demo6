@@ -43,7 +43,6 @@ typedef struct {
     ui_obj_type_t type;
     char id[DYNAMIC_APP_UI_ID_MAX_LEN];
     lv_obj_t *obj;
-    uint32_t click_handler_id;   /* 0 = 未绑定 onClick */
 } ui_registry_entry_t;
 
 /* ============================================================================
@@ -74,7 +73,7 @@ void utf8_copy_trunc(char *dst, size_t dst_size, const char *src, size_t src_len
 int registry_find(const char *id);
 
 /* 按 LVGL 对象指针反查 slot；未找到返回 -1。
- * Phase 3 root listener 用：lv_event_get_target 拿到对象 → 反查 id。 */
+ * root listener 用：lv_event_get_target 拿到对象 → 反查 id。 */
 int registry_find_by_obj(const lv_obj_t *obj);
 
 /* 占用一个空 slot 并填入 type/obj；满则返回 -1 */
