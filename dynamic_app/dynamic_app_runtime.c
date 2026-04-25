@@ -93,13 +93,15 @@ esp_err_t dynamic_app_runtime_setup(void)
     if (base_count == 0) return ESP_FAIL;
 
     /*
-     * 我们追加的 native 数量 = 11 个：
+     * 我们追加的 native 数量 = 13 个：
      *   sys.log
-     *   sys.ui.{setText, createLabel, createPanel, createButton, setStyle, onClick}
+     *   sys.ui.{setText, createLabel, createPanel, createButton,
+     *           setStyle, onClick, attachRootListener}
+     *   sys.__setDispatcher
      *   sys.time.{uptimeMs, uptimeStr}
      *   setInterval, clearInterval
      */
-    const int extra = 11;
+    const int extra = 13;
     size_t total = base_count + (size_t)extra;
 
     s_rt.cfunc_table = heap_caps_malloc(total * sizeof(JSCFunctionDef),
@@ -145,6 +147,10 @@ void dynamic_app_runtime_teardown(void)
     if (s_rt.ctx) {
         dynamic_app_intervals_reset(s_rt.ctx);
         dynamic_app_click_handlers_reset(s_rt.ctx);
+        if (s_rt.dispatcher_allocated) {
+            JS_DeleteGCRef(s_rt.ctx, &s_rt.dispatcher);
+            s_rt.dispatcher_allocated = false;
+        }
         JS_FreeContext(s_rt.ctx);
         s_rt.ctx = NULL;
     }

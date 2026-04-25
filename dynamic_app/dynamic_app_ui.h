@@ -40,6 +40,7 @@ typedef enum {
     DYNAMIC_APP_UI_CMD_CREATE_BUTTON,
     DYNAMIC_APP_UI_CMD_SET_STYLE,
     DYNAMIC_APP_UI_CMD_ATTACH_CLICK,
+    DYNAMIC_APP_UI_CMD_ATTACH_ROOT_LISTENER,   /* Phase 3: 在 root 上挂一个总 cb */
 } dynamic_app_ui_cmd_type_t;
 
 /*
@@ -73,7 +74,11 @@ typedef struct {
 } dynamic_app_ui_command_t;
 
 typedef struct {
-    uint32_t handler_id;   /* 1..MAX_CLICK_HANDLERS；0 保留为"无效" */
+    /* Phase 1/2 的一对一 onClick 路径仍然使用 handler_id；
+     * Phase 3 的 root delegation 路径使用 node_id 字符串。
+     * 两者互斥：handler_id != 0 表示老路径，node_id[0] != '\0' 表示新路径。 */
+    uint32_t handler_id;                           /* 老：1..MAX_CLICK_HANDLERS */
+    char     node_id[DYNAMIC_APP_UI_ID_MAX_LEN];   /* 新：被点中对象的 id */
 } dynamic_app_ui_event_t;
 
 /* ---------------- 生命周期 ---------------- */
@@ -112,6 +117,11 @@ bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
 
 bool dynamic_app_ui_enqueue_attach_click(const char *id, size_t id_len,
                                          uint32_t handler_id);
+
+/* Phase 3: 把指定 id 的对象升级为"根监听器"——在它上面挂一个 LVGL cb，
+ * 子对象冒泡上来的 click 都从这里捕获，事件入队时携带"被点中对象"的 id。
+ * 通常脚本会对最外层 root container 调一次。 */
+bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len);
 
 /* ---------------- UI -> Script ---------------- */
 

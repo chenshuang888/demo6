@@ -103,6 +103,16 @@ int registry_find(const char *id)
     return -1;
 }
 
+int registry_find_by_obj(const lv_obj_t *obj)
+{
+    if (!obj) return -1;
+    for (int i = 0; i < DYNAMIC_APP_UI_REGISTRY_MAX; i++) {
+        if (!s_registry[i].used) continue;
+        if (s_registry[i].obj == obj) return i;
+    }
+    return -1;
+}
+
 int registry_alloc(const char *id, ui_obj_type_t type, lv_obj_t *obj)
 {
     for (int i = 0; i < DYNAMIC_APP_UI_REGISTRY_MAX; i++) {

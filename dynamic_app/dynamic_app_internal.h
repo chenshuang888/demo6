@@ -74,6 +74,11 @@ typedef struct {
     js_interval_t intervals[MAX_INTERVALS];
     js_click_handler_t handlers[MAX_CLICK_HANDLERS];
 
+    /* Phase 3: delegation 路径的 JS 分发函数。由 sys.__setDispatcher 注册。
+     * 用 GCRef 钉住防 GC，teardown 时释放。allocated=false 表示未注册。 */
+    bool dispatcher_allocated;
+    JSGCRef dispatcher;
+
     /* 每个自定义 native fn 在 cfunc_table 里的索引。
      * 由 runtime 在 setup_stdlib_and_context 阶段填好，
      * 由 natives.c 在 bind_sys_and_timers 阶段读取使用。 */
@@ -84,6 +89,8 @@ typedef struct {
     int func_idx_sys_ui_create_button;
     int func_idx_sys_ui_set_style;
     int func_idx_sys_ui_on_click;
+    int func_idx_sys_ui_attach_root_listener;
+    int func_idx_sys_set_dispatcher;
     int func_idx_sys_time_uptime_ms;
     int func_idx_sys_time_uptime_str;
     int func_idx_set_interval;

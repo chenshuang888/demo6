@@ -207,11 +207,27 @@ bool dynamic_app_ui_enqueue_attach_click(const char *id, size_t id_len,
     return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
 }
 
+bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len)
+{
+    if (!s_ui_queue || !id) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_ATTACH_ROOT_LISTENER;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
 /* ============================================================================
  * §5. UI→Script 反向事件
  *
  *   on_lv_click 在 LVGL UI 线程上下文执行：绝不能 JS_Call，只能入队。
  *   pop_event 由 Script Task 主循环调用。
+ *
+ *   Phase 3：新增 on_lv_root_click —— 用于 ATTACH_ROOT_LISTENER 路径。
+ *   点击沿 LVGL 父链冒泡到 root，cb 里用 lv_event_get_target 拿到被点
+ *   的真正子对象，反查 registry 得到 node_id 字符串，一起入队。
  * ========================================================================= */
 
 static void on_lv_click(lv_event_t *e)
@@ -219,8 +235,30 @@ static void on_lv_click(lv_event_t *e)
     uint32_t handler_id = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     if (handler_id == 0 || !s_event_queue) return;
 
-    dynamic_app_ui_event_t ev = { .handler_id = handler_id };
+    dynamic_app_ui_event_t ev = {0};
+    ev.handler_id = handler_id;
     /* 队列满则丢弃，绝不阻塞 LVGL 调度 */
+    (void)xQueueSend(s_event_queue, &ev, 0);
+}
+
+static void on_lv_root_click(lv_event_t *e)
+{
+    if (!s_event_queue) return;
+
+    /* target = 冒泡起点的叶子对象；current_target = 挂 cb 的 root 本身。
+     * 这里需要叶子，才能把"被点中是谁"告诉 JS。
+     * LVGL v9 用 lv_event_get_target_obj 显式拿 lv_obj_t*。 */
+    lv_obj_t *target = lv_event_get_target_obj(e);
+    if (!target) return;
+
+    int slot = registry_find_by_obj(target);
+    if (slot < 0) return;   /* 非 registry 管辖的对象，忽略 */
+
+    dynamic_app_ui_event_t ev = {0};
+    ev.handler_id = 0;   /* 走 delegation 路径，handler_id 不用 */
+    strncpy(ev.node_id, s_registry[slot].id, sizeof(ev.node_id) - 1);
+    ev.node_id[sizeof(ev.node_id) - 1] = '\0';
+
     (void)xQueueSend(s_event_queue, &ev, 0);
 }
 
@@ -307,6 +345,12 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
 
     if (!obj) return -3;
 
+    /* Phase 3: 默认开启事件冒泡，让 click 能传到 root listener。
+     * LVGL 默认 EVENT_BUBBLE 关闭 —— 子对象的事件不会触发父级 cb。
+     * 我们这里统一开启，这样无论有没有 attachRootListener 都不影响功能；
+     * 一对一 onClick 路径下，handler_id 直接绑在该 obj 上，冒泡不影响触发。 */
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
+
     if (registry_alloc(cmd->id, type, obj) < 0) {
         ESP_LOGW(TAG, "UI registry full, drop create id=%s", cmd->id);
         lv_obj_del(obj);
@@ -380,6 +424,22 @@ void dynamic_app_ui_drain(int max_count)
                 lv_obj_add_event_cb(obj, on_lv_click, LV_EVENT_CLICKED,
                                     (void *)(uintptr_t)cmd.u.handler_id);
                 s_registry[slot].click_handler_id = cmd.u.handler_id;
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_ATTACH_ROOT_LISTENER: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0) {
+                    ESP_LOGW(TAG, "attach_root_listener: id %s not found", cmd.id);
+                    break;
+                }
+                lv_obj_t *obj = s_registry[slot].obj;
+                if (!obj || !lv_obj_is_valid(obj)) {
+                    s_registry[slot].obj = NULL;
+                    break;
+                }
+                /* user_data 不用，target 信息从 lv_event_get_target 取 */
+                lv_obj_add_event_cb(obj, on_lv_root_click, LV_EVENT_CLICKED, NULL);
                 break;
             }
 

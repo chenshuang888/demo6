@@ -1,44 +1,203 @@
-// Dynamic App —— Timers 页面（MVP）
+// Dynamic App —— Timers 页面 (Phase 3: VDOM + Root Delegation)
 //
-// 功能：
-//   - 最多 6 个 timer slot，固定预分配
-//   - 点 "+" 进入设置页，±按钮调分钟(±1) / 秒(±10)
-//   - Save 回列表，slot 填入 triggerAtMs；每秒 tick 更新剩余时间
-//   - 到期弹出 modal（一次只弹一个），Dismiss 后回列表并释放该 slot
+// 本文件分两段：
+//   §1. VDOM 框架（通用，可复用）—— Phase 3: 真·事件委托
+//   §2. Timers 业务（用 VDOM 写）
 //
-// 约束：esp-mquickjs 仅支持 ES5，不要 const/let/arrow function/模板字符串。
+// 设计原则：
+//   - VDOM 节点 = { type, props, children, _parent }，靠 props.id 寻址
+//   - Phase 3 增量：在最外层 root container 调一次 sys.ui.attachRootListener
+//     之后所有子按钮的点击都由 LVGL 冒泡到 root，C 侧的 on_lv_root_click
+//     拿到被点对象的 id 字符串，通过事件队列回到 JS 侧的全局
+//     __dynapp_dispatch(id) 函数；__dynapp_dispatch 调用 VDOM.dispatch
+//     从该节点向上冒泡触发 onClick 链。
+//   - 子节点不再调 sys.ui.onClick —— 0 次 native 注册（除 root 那一次）。
+//   - 状态变化 → 显式调 vdom.set(id, partialProps)
 //
-// 没有 destroy/hide 接口，所以显隐用 ALIGN 把 panel 偏到屏幕外 (X_OFFSCREEN)。
+// 约束：esp-mquickjs 仅支持 ES5。
 
-var Style = sys.style;
-var Align = sys.align;
-var Font  = sys.font;
-var Sym   = sys.symbols;
+// ============================================================================
+// §1. VDOM 框架
+// ============================================================================
 
-// ---------- 配色 ----------
-var COLOR_BG         = 0x1A1530;
-var COLOR_CARD       = 0x2D2640;
-var COLOR_CARD_ALT   = 0x3A3354;
-var COLOR_ACCENT     = 0x06B6D4; // 青绿
-var COLOR_TEXT       = 0xF1ECFF;
-var COLOR_DIM        = 0x6B6480; // 空 slot 灰字
-var COLOR_ACTIVE     = 0x10B981; // 活跃 timer 绿
-var COLOR_DANGER     = 0xEF4444; // modal 红
+var VDOM = (function () {
 
-// 屏外坐标：用 ALIGN(CENTER, X_OFFSCREEN, 0) 把整个 panel 推出可视区
+    // 节点 registry：id -> vnode
+    var nodes = {};
+    var autoSeq = 0;
+
+    // 字体/对齐/样式常量映射（避免到处写 sys.style.XXX）
+    var FONT_MAP  = { text: sys.font.TEXT, title: sys.font.TITLE, huge: sys.font.HUGE };
+    var ALIGN_MAP = {
+        tl: sys.align.TOP_LEFT,    tm: sys.align.TOP_MID,    tr: sys.align.TOP_RIGHT,
+        lm: sys.align.LEFT_MID,    c:  sys.align.CENTER,     rm: sys.align.RIGHT_MID,
+        bl: sys.align.BOTTOM_LEFT, bm: sys.align.BOTTOM_MID, br: sys.align.BOTTOM_RIGHT
+    };
+
+    // h(type, props, children) -> vnode
+    //   type: 'panel' | 'button' | 'label'
+    //   props: { id, text, onClick, ...style props }
+    //   children: array of vnodes (可省略)
+    function h(type, props, children) {
+        return {
+            type: type,
+            props: props || {},
+            children: children || [],
+            _parent: null,
+            _mounted: false
+        };
+    }
+
+    function autoId(type) {
+        autoSeq += 1;
+        return "_" + type + "_" + autoSeq;
+    }
+
+    // ---- 把 props 翻译成 sys.ui.setStyle 调用 ----
+    function applyStyle(id, props) {
+        if (props.bg !== undefined)
+            sys.ui.setStyle(id, sys.style.BG_COLOR, props.bg, 0, 0, 0);
+        if (props.fg !== undefined)
+            sys.ui.setStyle(id, sys.style.TEXT_COLOR, props.fg, 0, 0, 0);
+        if (props.radius !== undefined)
+            sys.ui.setStyle(id, sys.style.RADIUS, props.radius, 0, 0, 0);
+        if (props.size !== undefined)
+            sys.ui.setStyle(id, sys.style.SIZE,
+                props.size[0] | 0, props.size[1] | 0, 0, 0);
+        if (props.align !== undefined) {
+            var a = props.align;
+            var atype = ALIGN_MAP[a[0]];
+            if (atype === undefined) atype = sys.align.CENTER;
+            sys.ui.setStyle(id, sys.style.ALIGN,
+                atype, a[1] | 0, a[2] | 0, 0);
+        }
+        if (props.pad !== undefined) {
+            var p = props.pad;
+            sys.ui.setStyle(id, sys.style.PAD,
+                p[0] | 0, p[1] | 0, p[2] | 0, p[3] | 0);
+        }
+        if (props.borderBottom !== undefined)
+            sys.ui.setStyle(id, sys.style.BORDER_BOTTOM, props.borderBottom, 0, 0, 0);
+        if (props.flex !== undefined)
+            sys.ui.setStyle(id, sys.style.FLEX,
+                props.flex === 'row' ? 1 : 0, 0, 0, 0);
+        if (props.font !== undefined) {
+            var f = FONT_MAP[props.font];
+            if (f === undefined) f = sys.font.TEXT;
+            sys.ui.setStyle(id, sys.style.FONT, f, 0, 0, 0);
+        }
+    }
+
+    // ---- 事件冒泡 dispatcher（Phase 2 核心） ----
+    //
+    //   流程：用户点击 LVGL 对象 → C 侧 on_lv_click → JS 侧 trampoline
+    //         → dispatch(targetId)：从 target 沿 _parent 链上爬
+    //         → 每经过一个 vnode 检查 props.onClick，存在则调用
+    //         → handler 收到 event 对象 { target, currentTarget, stopPropagation() }
+    //         → handler 返回 false 或调 e.stopPropagation() 终止冒泡
+    //
+    //   注意：native 侧仍然是一对一注册（每个有 onClick 的节点 attach 一次），
+    //   所以"父节点想收子节点点击"的前提是：父节点本身得是可点击控件 + 有 onClick prop。
+    //   纯文本/纯容器（panel）目前在 LVGL 里默认不响应点击 —— 真正的"零 attach
+    //   也能冒泡"要等 Phase 3 加 root delegation 才能完全实现。
+    function dispatch(startId) {
+        var node = nodes[startId];
+        if (!node) return;
+        var stopped = false;
+        var ev = {
+            target: startId,
+            currentTarget: null,
+            stopPropagation: function () { stopped = true; }
+        };
+        var cur = node;
+        while (cur) {
+            if (typeof cur.props.onClick === 'function') {
+                ev.currentTarget = cur.props.id;
+                var ret = cur.props.onClick(ev);
+                if (ret === false || stopped) return;
+            }
+            cur = cur._parent;
+        }
+    }
+
+    // ---- 挂载一棵子树到 parentId（parentId 可为 null = root）----
+    function mount(node, parentId) {
+        if (node._mounted) return node;
+
+        var id = node.props.id;
+        if (!id) { id = autoId(node.type); node.props.id = id; }
+
+        if (node.type === 'panel')       sys.ui.createPanel(id, parentId || null);
+        else if (node.type === 'button') sys.ui.createButton(id, parentId || null);
+        else if (node.type === 'label')  sys.ui.createLabel(id, parentId || null);
+        else { sys.log("VDOM: unknown type " + node.type); return node; }
+
+        if (node.props.text !== undefined) sys.ui.setText(id, "" + node.props.text);
+        applyStyle(id, node.props);
+        // Phase 3: 不再为每个有 onClick 的节点调 sys.ui.onClick。
+        // 事件统一由 root listener 捕获 + 全局 __dynapp_dispatch 派发。
+        // VDOM 自己会在 dispatch 时遍历到该节点的 props.onClick。
+
+        nodes[id] = node;
+        node._mounted = true;
+
+        var i;
+        for (i = 0; i < node.children.length; i++) {
+            node.children[i]._parent = node;
+            mount(node.children[i], id);
+        }
+        return node;
+    }
+
+    // ---- 查找节点 ----
+    function find(id) { return nodes[id] || null; }
+
+    // ---- 局部更新 props（不改 type/children/onClick/id） ----
+    //   set(id, { text: "...", fg: 0x..., ... })
+    function set(id, patch) {
+        var node = nodes[id];
+        if (!node) { sys.log("VDOM.set: id not found: " + id); return; }
+        var k;
+        for (k in patch) {
+            if (!patch.hasOwnProperty(k)) continue;
+            node.props[k] = patch[k];
+        }
+        if (patch.text !== undefined) sys.ui.setText(id, "" + patch.text);
+        // 重新走一遍 applyStyle —— 只有 patch 里包含的 style 项会调 setStyle
+        applyStyle(id, patch);
+    }
+
+    return { h: h, mount: mount, find: find, set: set, dispatch: dispatch };
+})();
+
+// Phase 3: 把 dispatcher 注册给 C 侧（GCRef 持有）。
+// 选这种方式是因为 esp-mquickjs 顶层 `this` 为 undefined，拿不到全局对象。
+sys.__setDispatcher(function (id) { VDOM.dispatch(id); });
+
+var h = VDOM.h;
+
+// ============================================================================
+// §2. Timers 业务页面
+// ============================================================================
+
+// ---- 配色 ----
+var COLOR_BG       = 0x1A1530;
+var COLOR_CARD     = 0x2D2640;
+var COLOR_CARD_ALT = 0x3A3354;
+var COLOR_ACCENT   = 0x06B6D4;
+var COLOR_TEXT     = 0xF1ECFF;
+var COLOR_DIM      = 0x6B6480;
+var COLOR_ACTIVE   = 0x10B981;
+var COLOR_DANGER   = 0xEF4444;
+
 var X_OFFSCREEN = 1000;
+var SLOT_COUNT  = 6;
 
-var SLOT_COUNT = 6;
-
-// ---------- 状态 ----------
-var view = 'list';           // 'list' | 'set' | 'modal'
+// ---- 状态 ----
+var view = 'list';            // 'list' | 'set' | 'modal'
 var firingSlot = -1;
-
-// 新建草稿
 var draftMin = 5;
 var draftSec = 0;
-
-// slots[i] = { active: false, triggerAtMs: 0 }
 var slots = [];
 (function () {
     var i;
@@ -47,221 +206,26 @@ var slots = [];
     }
 })();
 
-// ---------- helpers ----------
-function panel(id, parent)  { sys.ui.createPanel(id, parent || null);  return id; }
-function button(id, parent) { sys.ui.createButton(id, parent || null); return id; }
-function label(id, parent, text) {
-    sys.ui.createLabel(id, parent || null);
-    if (text !== undefined) sys.ui.setText(id, text);
-    return id;
+// ---- 视图切换：靠 align 把非当前 panel 推到屏外 ----
+function showView(name) {
+    view = name;
+    VDOM.set("listPanel",  { align: ['c', name === 'list'  ? 0 : X_OFFSCREEN, 0] });
+    VDOM.set("setPanel",   { align: ['c', name === 'set'   ? 0 : X_OFFSCREEN, 0] });
+    VDOM.set("modalPanel", { align: ['c', name === 'modal' ? 0 : X_OFFSCREEN, 0] });
 }
-function st(id, key, a, b, c, d) {
-    sys.ui.setStyle(id, key,
-        a | 0,
-        b === undefined ? 0 : (b | 0),
-        c === undefined ? 0 : (c | 0),
-        d === undefined ? 0 : (d | 0));
-}
+
+// ---- 工具 ----
 function pad2(n) {
-    n = n | 0;
-    if (n < 0) n = 0;
-    if (n < 10) return "0" + n;
-    return "" + n;
+    n = n | 0; if (n < 0) n = 0;
+    return n < 10 ? "0" + n : "" + n;
 }
 function fmtMS(totalSec) {
-    totalSec = totalSec | 0;
-    if (totalSec < 0) totalSec = 0;
+    totalSec = totalSec | 0; if (totalSec < 0) totalSec = 0;
     var m = (totalSec / 60) | 0;
     var s = totalSec - m * 60;
     if (m > 99) m = 99;
     return pad2(m) + ":" + pad2(s);
 }
-
-// ---------- 视图切换 ----------
-// 把指定视图居中显示，其余推到屏外。
-function showView(name) {
-    view = name;
-    st("listPanel",  Style.ALIGN, Align.CENTER, name === 'list'  ? 0 : X_OFFSCREEN, 0);
-    st("setPanel",   Style.ALIGN, Align.CENTER, name === 'set'   ? 0 : X_OFFSCREEN, 0);
-    st("modalPanel", Style.ALIGN, Align.CENTER, name === 'modal' ? 0 : X_OFFSCREEN, 0);
-}
-
-// ---------- 构建：根容器 + 三个 panel ----------
-sys.log("timers: build start");
-
-// root 背景色（root 已由 C 侧 create，size 由页面决定，这里只刷背景）
-// 注意：root 本身未注册到 registry，不能直接 setStyle。
-// 所以三个 panel 各自全屏 + 带背景色。
-
-// ---- List Panel ----
-panel("listPanel", null);
-st("listPanel", Style.SIZE, -100, -100);
-st("listPanel", Style.BG_COLOR, COLOR_BG);
-st("listPanel", Style.FLEX, 0); // column
-
-// header（标题 + 号按钮）
-panel("hdr", "listPanel");
-st("hdr", Style.SIZE, -100, 40);
-st("hdr", Style.BG_COLOR, COLOR_CARD);
-
-label("hdrTitle", "hdr", "Timers");
-st("hdrTitle", Style.TEXT_COLOR, COLOR_TEXT);
-st("hdrTitle", Style.FONT, Font.TITLE);
-st("hdrTitle", Style.ALIGN, Align.LEFT_MID, 14, 0);
-
-button("addBtn", "hdr");
-st("addBtn", Style.SIZE, 36, 32);
-st("addBtn", Style.BG_COLOR, COLOR_ACCENT);
-st("addBtn", Style.RADIUS, 8);
-st("addBtn", Style.ALIGN, Align.RIGHT_MID, -8, 0);
-
-label("addBtnLbl", "addBtn", "+");
-st("addBtnLbl", Style.TEXT_COLOR, COLOR_TEXT);
-st("addBtnLbl", Style.FONT, Font.TITLE);
-st("addBtnLbl", Style.ALIGN, Align.CENTER, 0, 0);
-
-sys.ui.onClick("addBtn", function () {
-    if (view !== 'list') return;
-    draftMin = 5; draftSec = 0;
-    refreshDraft();
-    showView('set');
-});
-
-// slot 容器（承载 6 行）。固定高度 = 6×32 = 192，避免 -100 把 hdr 挤掉。
-panel("list", "listPanel");
-st("list", Style.SIZE, -100, 192);
-st("list", Style.BG_COLOR, COLOR_CARD);
-st("list", Style.FLEX, 0);
-
-(function buildSlots() {
-    var i;
-    for (i = 0; i < SLOT_COUNT; i++) {
-        var row = "slot_" + i;
-        button(row, "list");
-        st(row, Style.SIZE, -100, 32);
-        st(row, Style.BG_COLOR, COLOR_CARD);
-        st(row, Style.BORDER_BOTTOM, COLOR_CARD_ALT);
-
-        var ic = row + "_ic";
-        label(ic, row, Sym.BELL);
-        st(ic, Style.TEXT_COLOR, COLOR_DIM);
-        st(ic, Style.FONT, Font.TEXT);
-        st(ic, Style.ALIGN, Align.LEFT_MID, 12, 0);
-
-        var tm = row + "_t";
-        label(tm, row, "--:--");
-        st(tm, Style.TEXT_COLOR, COLOR_DIM);
-        st(tm, Style.FONT, Font.TEXT);
-        st(tm, Style.ALIGN, Align.LEFT_MID, 40, 0);
-
-        var state = row + "_s";
-        label(state, row, "Empty");
-        st(state, Style.TEXT_COLOR, COLOR_DIM);
-        st(state, Style.FONT, Font.TEXT);
-        st(state, Style.ALIGN, Align.RIGHT_MID, -14, 0);
-    }
-})();
-
-// ---- Set Panel ----
-panel("setPanel", null);
-st("setPanel", Style.SIZE, -100, -100);
-st("setPanel", Style.BG_COLOR, COLOR_BG);
-st("setPanel", Style.ALIGN, Align.CENTER, X_OFFSCREEN, 0);
-
-label("setTitle", "setPanel", "New Timer");
-st("setTitle", Style.TEXT_COLOR, COLOR_TEXT);
-st("setTitle", Style.FONT, Font.TITLE);
-st("setTitle", Style.ALIGN, Align.TOP_MID, 0, 10);
-
-// 分钟列
-button("minPlus", "setPanel");
-st("minPlus", Style.SIZE, 44, 34);
-st("minPlus", Style.BG_COLOR, COLOR_CARD);
-st("minPlus", Style.RADIUS, 8);
-st("minPlus", Style.ALIGN, Align.CENTER, -48, -48);
-label("minPlusL", "minPlus", "+");
-st("minPlusL", Style.TEXT_COLOR, COLOR_ACCENT);
-st("minPlusL", Style.FONT, Font.TITLE);
-st("minPlusL", Style.ALIGN, Align.CENTER, 0, 0);
-
-label("minVal", "setPanel", "05");
-st("minVal", Style.TEXT_COLOR, COLOR_TEXT);
-st("minVal", Style.FONT, Font.HUGE);
-st("minVal", Style.ALIGN, Align.CENTER, -48, 0);
-
-button("minMinus", "setPanel");
-st("minMinus", Style.SIZE, 44, 34);
-st("minMinus", Style.BG_COLOR, COLOR_CARD);
-st("minMinus", Style.RADIUS, 8);
-st("minMinus", Style.ALIGN, Align.CENTER, -48, 48);
-label("minMinusL", "minMinus", "-");
-st("minMinusL", Style.TEXT_COLOR, COLOR_ACCENT);
-st("minMinusL", Style.FONT, Font.TITLE);
-st("minMinusL", Style.ALIGN, Align.CENTER, 0, 0);
-
-label("minLbl", "setPanel", "Min");
-st("minLbl", Style.TEXT_COLOR, COLOR_DIM);
-st("minLbl", Style.FONT, Font.TEXT);
-st("minLbl", Style.ALIGN, Align.CENTER, -48, 80);
-
-// 冒号
-label("colon", "setPanel", ":");
-st("colon", Style.TEXT_COLOR, COLOR_TEXT);
-st("colon", Style.FONT, Font.HUGE);
-st("colon", Style.ALIGN, Align.CENTER, 0, 0);
-
-// 秒列
-button("secPlus", "setPanel");
-st("secPlus", Style.SIZE, 44, 34);
-st("secPlus", Style.BG_COLOR, COLOR_CARD);
-st("secPlus", Style.RADIUS, 8);
-st("secPlus", Style.ALIGN, Align.CENTER, 48, -48);
-label("secPlusL", "secPlus", "+");
-st("secPlusL", Style.TEXT_COLOR, COLOR_ACCENT);
-st("secPlusL", Style.FONT, Font.TITLE);
-st("secPlusL", Style.ALIGN, Align.CENTER, 0, 0);
-
-label("secVal", "setPanel", "00");
-st("secVal", Style.TEXT_COLOR, COLOR_TEXT);
-st("secVal", Style.FONT, Font.HUGE);
-st("secVal", Style.ALIGN, Align.CENTER, 48, 0);
-
-button("secMinus", "setPanel");
-st("secMinus", Style.SIZE, 44, 34);
-st("secMinus", Style.BG_COLOR, COLOR_CARD);
-st("secMinus", Style.RADIUS, 8);
-st("secMinus", Style.ALIGN, Align.CENTER, 48, 48);
-label("secMinusL", "secMinus", "-");
-st("secMinusL", Style.TEXT_COLOR, COLOR_ACCENT);
-st("secMinusL", Style.FONT, Font.TITLE);
-st("secMinusL", Style.ALIGN, Align.CENTER, 0, 0);
-
-label("secLbl", "setPanel", "Sec");
-st("secLbl", Style.TEXT_COLOR, COLOR_DIM);
-st("secLbl", Style.FONT, Font.TEXT);
-st("secLbl", Style.ALIGN, Align.CENTER, 48, 80);
-
-// 底部按钮
-button("cancelBtn", "setPanel");
-st("cancelBtn", Style.SIZE, 90, 36);
-st("cancelBtn", Style.BG_COLOR, COLOR_CARD);
-st("cancelBtn", Style.RADIUS, 8);
-st("cancelBtn", Style.ALIGN, Align.BOTTOM_LEFT, 14, -14);
-label("cancelL", "cancelBtn", "Cancel");
-st("cancelL", Style.TEXT_COLOR, COLOR_TEXT);
-st("cancelL", Style.FONT, Font.TEXT);
-st("cancelL", Style.ALIGN, Align.CENTER, 0, 0);
-
-button("saveBtn", "setPanel");
-st("saveBtn", Style.SIZE, 90, 36);
-st("saveBtn", Style.BG_COLOR, COLOR_ACCENT);
-st("saveBtn", Style.RADIUS, 8);
-st("saveBtn", Style.ALIGN, Align.BOTTOM_RIGHT, -14, -14);
-label("saveL", "saveBtn", "Save");
-st("saveL", Style.TEXT_COLOR, COLOR_TEXT);
-st("saveL", Style.FONT, Font.TEXT);
-st("saveL", Style.ALIGN, Align.CENTER, 0, 0);
-
 function clampDraft() {
     if (draftMin < 0)  draftMin = 0;
     if (draftMin > 99) draftMin = 99;
@@ -270,26 +234,46 @@ function clampDraft() {
 }
 function refreshDraft() {
     clampDraft();
-    sys.ui.setText("minVal", pad2(draftMin));
-    sys.ui.setText("secVal", pad2(draftSec));
+    VDOM.set("minVal", { text: pad2(draftMin) });
+    VDOM.set("secVal", { text: pad2(draftSec) });
 }
 
-sys.ui.onClick("minPlus",  function () { if (view !== 'set') return; draftMin += 1;  refreshDraft(); });
-sys.ui.onClick("minMinus", function () { if (view !== 'set') return; draftMin -= 1;  refreshDraft(); });
-sys.ui.onClick("secPlus",  function () { if (view !== 'set') return; draftSec += 10; refreshDraft(); });
-sys.ui.onClick("secMinus", function () { if (view !== 'set') return; draftSec -= 10; refreshDraft(); });
+// ---- slot 渲染 ----
+function paintSlot(i) {
+    var s = slots[i];
+    var prefix = "slot_" + i;
+    if (s.active) {
+        var remainMs  = s.triggerAtMs - sys.time.uptimeMs();
+        var remainSec = (remainMs + 999) / 1000 | 0;
+        if (remainSec < 0) remainSec = 0;
+        VDOM.set(prefix + "_ic", { fg: COLOR_ACTIVE });
+        VDOM.set(prefix + "_t",  { text: fmtMS(remainSec), fg: COLOR_TEXT });
+        VDOM.set(prefix + "_s",  { text: "Active", fg: COLOR_ACTIVE });
+    } else {
+        VDOM.set(prefix + "_ic", { fg: COLOR_DIM });
+        VDOM.set(prefix + "_t",  { text: "--:--", fg: COLOR_DIM });
+        VDOM.set(prefix + "_s",  { text: "Empty", fg: COLOR_DIM });
+    }
+}
 
-sys.ui.onClick("cancelBtn", function () {
-    if (view !== 'set') return;
-    showView('list');
-});
+// ---- 事件回调 ----
+function onAdd() {
+    if (view !== 'list') return;
+    draftMin = 5; draftSec = 0;
+    refreshDraft();
+    showView('set');
+}
+function onMinPlus()  { if (view === 'set') { draftMin += 1;  refreshDraft(); } }
+function onMinMinus() { if (view === 'set') { draftMin -= 1;  refreshDraft(); } }
+function onSecPlus()  { if (view === 'set') { draftSec += 10; refreshDraft(); } }
+function onSecMinus() { if (view === 'set') { draftSec -= 10; refreshDraft(); } }
+function onCancel()   { if (view === 'set') showView('list'); }
 
-sys.ui.onClick("saveBtn", function () {
+function onSave() {
     if (view !== 'set') return;
     clampDraft();
     var totalSec = draftMin * 60 + draftSec;
     if (totalSec <= 0) { showView('list'); return; }
-    // 找空 slot
     var i;
     for (i = 0; i < SLOT_COUNT; i++) {
         if (!slots[i].active) {
@@ -300,43 +284,11 @@ sys.ui.onClick("saveBtn", function () {
             return;
         }
     }
-    // 没空位就忽略
     sys.log("timers: all slots full");
     showView('list');
-});
+}
 
-// ---- Modal Panel ----
-panel("modalPanel", null);
-st("modalPanel", Style.SIZE, -100, -100);
-st("modalPanel", Style.BG_COLOR, COLOR_CARD);
-st("modalPanel", Style.ALIGN, Align.CENTER, X_OFFSCREEN, 0);
-
-label("modalIcon", "modalPanel", Sym.BELL);
-st("modalIcon", Style.TEXT_COLOR, COLOR_DANGER);
-st("modalIcon", Style.FONT, Font.HUGE);
-st("modalIcon", Style.ALIGN, Align.CENTER, 0, -50);
-
-label("modalTitle", "modalPanel", "Time's up!");
-st("modalTitle", Style.TEXT_COLOR, COLOR_TEXT);
-st("modalTitle", Style.FONT, Font.TITLE);
-st("modalTitle", Style.ALIGN, Align.CENTER, 0, 0);
-
-label("modalSub", "modalPanel", "--:--");
-st("modalSub", Style.TEXT_COLOR, COLOR_DIM);
-st("modalSub", Style.FONT, Font.TEXT);
-st("modalSub", Style.ALIGN, Align.CENTER, 0, 28);
-
-button("dismissBtn", "modalPanel");
-st("dismissBtn", Style.SIZE, 120, 40);
-st("dismissBtn", Style.BG_COLOR, COLOR_DANGER);
-st("dismissBtn", Style.RADIUS, 10);
-st("dismissBtn", Style.ALIGN, Align.CENTER, 0, 60);
-label("dismissL", "dismissBtn", "Dismiss");
-st("dismissL", Style.TEXT_COLOR, COLOR_TEXT);
-st("dismissL", Style.FONT, Font.TEXT);
-st("dismissL", Style.ALIGN, Align.CENTER, 0, 0);
-
-sys.ui.onClick("dismissBtn", function () {
+function onDismiss() {
     if (view !== 'modal') return;
     if (firingSlot >= 0) {
         slots[firingSlot].active = false;
@@ -345,51 +297,149 @@ sys.ui.onClick("dismissBtn", function () {
         firingSlot = -1;
     }
     showView('list');
-});
-
-// ---------- slot 渲染 ----------
-function paintSlot(i) {
-    var row = "slot_" + i;
-    var tm = row + "_t";
-    var state = row + "_s";
-    var ic = row + "_ic";
-    var s = slots[i];
-    if (s.active) {
-        var remainMs = s.triggerAtMs - sys.time.uptimeMs();
-        var remainSec = (remainMs + 999) / 1000 | 0; // ceil
-        if (remainSec < 0) remainSec = 0;
-        sys.ui.setText(tm, fmtMS(remainSec));
-        sys.ui.setText(state, "Active");
-        st(ic, Style.TEXT_COLOR, COLOR_ACTIVE);
-        st(tm, Style.TEXT_COLOR, COLOR_TEXT);
-        st(state, Style.TEXT_COLOR, COLOR_ACTIVE);
-    } else {
-        sys.ui.setText(tm, "--:--");
-        sys.ui.setText(state, "Empty");
-        st(ic, Style.TEXT_COLOR, COLOR_DIM);
-        st(tm, Style.TEXT_COLOR, COLOR_DIM);
-        st(state, Style.TEXT_COLOR, COLOR_DIM);
-    }
 }
 
-// ---------- 初始化显示 ----------
+// ---- 构造 slot 子树（一个工厂） ----
+function makeSlotRow(idx) {
+    var prefix = "slot_" + idx;
+    return h('button', {
+        id: prefix,
+        size: [-100, 32],
+        bg: COLOR_CARD,
+        borderBottom: COLOR_CARD_ALT
+    }, [
+        h('label', { id: prefix+"_ic", text: sys.symbols.BELL, fg: COLOR_DIM,
+                     font: 'text', align: ['lm', 12, 0] }),
+        h('label', { id: prefix+"_t",  text: "--:--",          fg: COLOR_DIM,
+                     font: 'text', align: ['lm', 40, 0] }),
+        h('label', { id: prefix+"_s",  text: "Empty",          fg: COLOR_DIM,
+                     font: 'text', align: ['rm', -14, 0] })
+    ]);
+}
+
+// ---- 构造整棵 UI 树 ----
+sys.log("timers/vdom: build start");
+
+// 先挂一个 appRoot 容器 —— 三个视图 panel 都做它的子节点。
+// 这样 attachRootListener 只需要在 appRoot 上注册一次，
+// 所有按钮点击都能冒泡到这里被捕获。
+VDOM.mount(
+    h('panel', { id: "appRoot", size: [-100,-100], bg: COLOR_BG }),
+    null
+);
+
+// List 视图
+var slotRows = [];
+(function () { var i; for (i = 0; i < SLOT_COUNT; i++) slotRows.push(makeSlotRow(i)); })();
+
+VDOM.mount(
+    h('panel', { id: "listPanel", size: [-100,-100], bg: COLOR_BG, flex: 'col' }, [
+        h('panel', { id: "hdr", size: [-100, 40], bg: COLOR_CARD }, [
+            h('label',  { id: "hdrTitle", text: "Timers", fg: COLOR_TEXT,
+                          font: 'title', align: ['lm', 14, 0] }),
+            h('button', { id: "addBtn", size: [36,32], bg: COLOR_ACCENT, radius: 8,
+                          align: ['rm', -8, 0], onClick: onAdd }, [
+                h('label', { id: "addBtnLbl", text: "+", fg: COLOR_TEXT,
+                             font: 'title', align: ['c', 0, 0] })
+            ])
+        ]),
+        h('panel', { id: "list", size: [-100, 192], bg: COLOR_CARD, flex: 'col' }, slotRows)
+    ]),
+    "appRoot"
+);
+
+// Set 视图
+VDOM.mount(
+    h('panel', { id: "setPanel", size: [-100,-100], bg: COLOR_BG,
+                 align: ['c', X_OFFSCREEN, 0] }, [
+        h('label', { id: "setTitle", text: "New Timer", fg: COLOR_TEXT,
+                     font: 'title', align: ['tm', 0, 10] }),
+        // Minutes column
+        h('button', { id: "minPlus", size: [44,34], bg: COLOR_CARD, radius: 8,
+                      align: ['c', -48, -48], onClick: onMinPlus }, [
+            h('label', { id: "minPlusL", text: "+", fg: COLOR_ACCENT,
+                         font: 'title', align: ['c', 0, 0] })
+        ]),
+        h('label', { id: "minVal", text: "05", fg: COLOR_TEXT,
+                     font: 'huge', align: ['c', -48, 0] }),
+        h('button', { id: "minMinus", size: [44,34], bg: COLOR_CARD, radius: 8,
+                      align: ['c', -48, 48], onClick: onMinMinus }, [
+            h('label', { id: "minMinusL", text: "-", fg: COLOR_ACCENT,
+                         font: 'title', align: ['c', 0, 0] })
+        ]),
+        h('label', { id: "minLbl", text: "Min", fg: COLOR_DIM,
+                     font: 'text', align: ['c', -48, 80] }),
+        // Colon
+        h('label', { id: "colon", text: ":", fg: COLOR_TEXT,
+                     font: 'huge', align: ['c', 0, 0] }),
+        // Seconds column
+        h('button', { id: "secPlus", size: [44,34], bg: COLOR_CARD, radius: 8,
+                      align: ['c', 48, -48], onClick: onSecPlus }, [
+            h('label', { id: "secPlusL", text: "+", fg: COLOR_ACCENT,
+                         font: 'title', align: ['c', 0, 0] })
+        ]),
+        h('label', { id: "secVal", text: "00", fg: COLOR_TEXT,
+                     font: 'huge', align: ['c', 48, 0] }),
+        h('button', { id: "secMinus", size: [44,34], bg: COLOR_CARD, radius: 8,
+                      align: ['c', 48, 48], onClick: onSecMinus }, [
+            h('label', { id: "secMinusL", text: "-", fg: COLOR_ACCENT,
+                         font: 'title', align: ['c', 0, 0] })
+        ]),
+        h('label', { id: "secLbl", text: "Sec", fg: COLOR_DIM,
+                     font: 'text', align: ['c', 48, 80] }),
+        // Bottom buttons
+        h('button', { id: "cancelBtn", size: [90,36], bg: COLOR_CARD, radius: 8,
+                      align: ['bl', 14, -14], onClick: onCancel }, [
+            h('label', { id: "cancelL", text: "Cancel", fg: COLOR_TEXT,
+                         font: 'text', align: ['c', 0, 0] })
+        ]),
+        h('button', { id: "saveBtn", size: [90,36], bg: COLOR_ACCENT, radius: 8,
+                      align: ['br', -14, -14], onClick: onSave }, [
+            h('label', { id: "saveL", text: "Save", fg: COLOR_TEXT,
+                         font: 'text', align: ['c', 0, 0] })
+        ])
+    ]),
+    "appRoot"
+);
+
+// Modal 视图
+VDOM.mount(
+    h('panel', { id: "modalPanel", size: [-100,-100], bg: COLOR_CARD,
+                 align: ['c', X_OFFSCREEN, 0] }, [
+        h('label', { id: "modalIcon",  text: sys.symbols.BELL, fg: COLOR_DANGER,
+                     font: 'huge',  align: ['c', 0, -50] }),
+        h('label', { id: "modalTitle", text: "Time's up!",     fg: COLOR_TEXT,
+                     font: 'title', align: ['c', 0, 0] }),
+        h('label', { id: "modalSub",   text: "--:--",          fg: COLOR_DIM,
+                     font: 'text',  align: ['c', 0, 28] }),
+        h('button', { id: "dismissBtn", size: [120,40], bg: COLOR_DANGER, radius: 10,
+                      align: ['c', 0, 60], onClick: onDismiss }, [
+            h('label', { id: "dismissL", text: "Dismiss", fg: COLOR_TEXT,
+                         font: 'text', align: ['c', 0, 0] })
+        ])
+    ]),
+    "appRoot"
+);
+
+// Phase 3: 一次性挂载 root listener，所有按钮点击通过这条总干线回到 JS。
+sys.ui.attachRootListener("appRoot");
+
+// 初始化显示
 showView('list');
 (function () { var i; for (i = 0; i < SLOT_COUNT; i++) paintSlot(i); })();
 
-// ---------- tick：每秒更新 + 检查到期 ----------
+// 每秒 tick：刷新活跃 slot + 检查到期
 setInterval(function () {
     var now = sys.time.uptimeMs();
     var i;
-    // 先刷新活跃 slot 的剩余显示
     for (i = 0; i < SLOT_COUNT; i++) {
         if (slots[i].active) paintSlot(i);
     }
-    // 找一个到期的（只触发第一个，其它下一秒再处理）
     if (view !== 'modal') {
         for (i = 0; i < SLOT_COUNT; i++) {
             if (slots[i].active && slots[i].triggerAtMs <= now) {
                 firingSlot = i;
-                sys.ui.setText("modalSub", "Slot " + (i + 1));
+                VDOM.set("modalSub", { text: "Slot " + (i + 1) });
                 showView('modal');
                 break;
             }
@@ -397,4 +447,4 @@ setInterval(function () {
     }
 }, 1000);
 
-sys.log("timers: build done");
+sys.log("timers/vdom: build done");
