@@ -182,6 +182,18 @@ bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len)
     return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
 }
 
+bool dynamic_app_ui_enqueue_destroy(const char *id, size_t id_len)
+{
+    if (!s_ui_queue || !id) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_DESTROY;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
 /* ============================================================================
  * §5. UI→Script 反向事件
  *
@@ -230,11 +242,12 @@ void dynamic_app_ui_clear_event_queue(void)
  *   被 UI 线程主循环（app_main.c）周期性调用。
  *   每次最多消 max_count 条命令，避免长时间阻塞 LVGL 渲染。
  *
- *   分发 5 条路径：
+ *   分发 6 条路径：
  *     CREATE_LABEL / PANEL / BUTTON → do_create()
  *     SET_TEXT             → 查 registry → lv_label_set_text
  *     SET_STYLE            → 查 registry → apply_style()  [styles.c]
  *     ATTACH_ROOT_LISTENER → 查 registry → lv_obj_add_event_cb(on_lv_root_click)
+ *     DESTROY              → 查 registry → lv_obj_del + slot.used=false
  * ========================================================================= */
 
 /* 创建 LVGL 对象并入 registry。返回 0 = 成功。 */
@@ -370,6 +383,22 @@ void dynamic_app_ui_drain(int max_count)
                 }
                 /* user_data 不用，target 信息从 lv_event_get_target 取 */
                 lv_obj_add_event_cb(obj, on_lv_root_click, LV_EVENT_CLICKED, NULL);
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_DESTROY: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0) break;   /* 已被前一次 destroy 释放，幂等 */
+                lv_obj_t *obj = s_registry[slot].obj;
+                if (obj && lv_obj_is_valid(obj)) {
+                    /* lv_obj_del 会级联删子对象。约定 JS 侧自底向上调 destroy，
+                     * 子 slot 已先被释放；万一没递归，残留 slot 留待后续操作时
+                     * 由 lv_obj_is_valid 检查清掉，最坏 page 退出 unregister_all。 */
+                    lv_obj_del(obj);
+                }
+                s_registry[slot].used = false;
+                s_registry[slot].obj = NULL;
+                s_registry[slot].id[0] = '\0';
                 break;
             }
 

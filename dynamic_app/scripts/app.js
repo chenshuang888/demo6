@@ -1,8 +1,8 @@
-// Dynamic App —— Timers 页面（VDOM + Root Delegation）
+// Dynamic App —— 闹钟页面（华为风格复刻，240×320 适配）
 //
 // 本文件分两段：
 //   §1. VDOM 框架（通用，可复用）
-//   §2. Timers 业务（用 VDOM 写）
+//   §2. 闹钟业务
 //
 // 设计原则：
 //   - VDOM 节点 = { type, props, children, _parent }，靠 props.id 寻址
@@ -11,7 +11,7 @@
 //     拿到被点对象的 id 字符串，通过事件队列回到 JS 侧由 dispatcher
 //     沿 _parent 链上爬触发 onClick。
 //   - 整页只挂 1 次 native cb；子节点都不调 sys.ui.* 的事件 API。
-//   - 状态变化 → 显式调 vdom.set(id, partialProps)
+//   - 状态变化 → 显式调 vdom.set(id, partialProps) 或 vdom.destroy/mount
 //
 // 约束：esp-mquickjs 仅支持 ES5。
 
@@ -21,11 +21,9 @@
 
 var VDOM = (function () {
 
-    // 节点 registry：id -> vnode
     var nodes = {};
     var autoSeq = 0;
 
-    // 字体/对齐/样式常量映射（避免到处写 sys.style.XXX）
     var FONT_MAP  = { text: sys.font.TEXT, title: sys.font.TITLE, huge: sys.font.HUGE };
     var ALIGN_MAP = {
         tl: sys.align.TOP_LEFT,    tm: sys.align.TOP_MID,    tr: sys.align.TOP_RIGHT,
@@ -33,10 +31,6 @@ var VDOM = (function () {
         bl: sys.align.BOTTOM_LEFT, bm: sys.align.BOTTOM_MID, br: sys.align.BOTTOM_RIGHT
     };
 
-    // h(type, props, children) -> vnode
-    //   type: 'panel' | 'button' | 'label'
-    //   props: { id, text, onClick, ...style props }
-    //   children: array of vnodes (可省略)
     function h(type, props, children) {
         return {
             type: type,
@@ -52,7 +46,6 @@ var VDOM = (function () {
         return "_" + type + "_" + autoSeq;
     }
 
-    // ---- 把 props 翻译成 sys.ui.setStyle 调用 ----
     function applyStyle(id, props) {
         if (props.bg !== undefined)
             sys.ui.setStyle(id, sys.style.BG_COLOR, props.bg, 0, 0, 0);
@@ -87,13 +80,7 @@ var VDOM = (function () {
         }
     }
 
-    // ---- 事件冒泡 dispatcher ----
-    //
-    //   流程：用户点击 LVGL 对象 → root listener 入队 node_id
-    //         → C drain 调 dispatcher → dispatch(targetId)
-    //         → 从 target 沿 _parent 链上爬，每经过一个 vnode 检查 props.onClick
-    //         → handler 收到 event 对象 { target, currentTarget, stopPropagation() }
-    //         → handler 返回 false 或调 e.stopPropagation() 终止冒泡
+    // 事件冒泡 dispatcher
     function dispatch(startId) {
         var node = nodes[startId];
         if (!node) return;
@@ -114,7 +101,6 @@ var VDOM = (function () {
         }
     }
 
-    // ---- 挂载一棵子树到 parentId（parentId 可为 null = root）----
     function mount(node, parentId) {
         if (node._mounted) return node;
 
@@ -128,8 +114,6 @@ var VDOM = (function () {
 
         if (node.props.text !== undefined) sys.ui.setText(id, "" + node.props.text);
         applyStyle(id, node.props);
-        // 不为每个有 onClick 的节点单独 attach。事件统一由 root listener
-        // 捕获，dispatcher 沿 _parent 链遍历到该节点的 props.onClick。
 
         nodes[id] = node;
         node._mounted = true;
@@ -142,11 +126,8 @@ var VDOM = (function () {
         return node;
     }
 
-    // ---- 查找节点 ----
     function find(id) { return nodes[id] || null; }
 
-    // ---- 局部更新 props（不改 type/children/onClick/id） ----
-    //   set(id, { text: "...", fg: 0x..., ... })
     function set(id, patch) {
         var node = nodes[id];
         if (!node) { sys.log("VDOM.set: id not found: " + id); return; }
@@ -156,288 +137,284 @@ var VDOM = (function () {
             node.props[k] = patch[k];
         }
         if (patch.text !== undefined) sys.ui.setText(id, "" + patch.text);
-        // 重新走一遍 applyStyle —— 只有 patch 里包含的 style 项会调 setStyle
         applyStyle(id, patch);
     }
 
-    return { h: h, mount: mount, find: find, set: set, dispatch: dispatch };
+    function destroy(id) {
+        var node = nodes[id];
+        if (!node) return;
+        var kids = node.children.slice();
+        var i;
+        for (i = 0; i < kids.length; i++) {
+            if (kids[i].props && kids[i].props.id) destroy(kids[i].props.id);
+        }
+        var parent = node._parent;
+        if (parent && parent.children) {
+            var idx = parent.children.indexOf(node);
+            if (idx >= 0) parent.children.splice(idx, 1);
+        }
+        sys.ui.destroy(id);
+        delete nodes[id];
+    }
+
+    return { h: h, mount: mount, find: find, set: set, destroy: destroy, dispatch: dispatch };
 })();
 
-// 把 dispatcher 注册给 C 侧（GCRef 持有）。
-// 选这种方式是因为 esp-mquickjs 顶层 `this` 为 undefined，拿不到全局对象。
 sys.__setDispatcher(function (id) { VDOM.dispatch(id); });
 
 var h = VDOM.h;
 
 // ============================================================================
-// §2. Timers 业务页面
+// §2. 闹钟业务
 // ============================================================================
+//
+// 屏幕 240×320。布局（自上而下）：
+//   - header        高 36：标题"闹钟" + 右上两点菜单（装饰，不响应）
+//   - clockArea     高 80：当前时间大字（HH:MM:SS）+ 上方时段标签
+//   - statusLine    高 20：'已开启 N 个闹钟' / '所有闹钟已关闭'
+//   - listArea      剩下空间 -36-80-20-44 = 320-180 = 140：闹钟卡片列表
+//   - fabArea       高 44：底部居中圆形 +
+//
+// 卡片：宽 -100%（即铺满），高 56，圆角 14
+//   左侧：时段（小字）+ 时间（大字）+ 副标题"闹钟，每天"
+//   右侧：手搓 switch（按钮 36×22，圆角 11，里面一个 16×16 圆 label 当滑块）
 
-// ---- 配色 ----
-var COLOR_BG       = 0x1A1530;
-var COLOR_CARD     = 0x2D2640;
-var COLOR_CARD_ALT = 0x3A3354;
-var COLOR_ACCENT   = 0x06B6D4;
-var COLOR_TEXT     = 0xF1ECFF;
-var COLOR_DIM      = 0x6B6480;
-var COLOR_ACTIVE   = 0x10B981;
-var COLOR_DANGER   = 0xEF4444;
+var COLOR_BG          = 0x1A1530;   // 深紫主背景
+var COLOR_HEADER      = 0x2D2640;
+var COLOR_CARD        = 0x2D2640;   // 卡片底
+var COLOR_TEXT        = 0xF1ECFF;   // 主文字
+var COLOR_TEXT_DIM    = 0x9088A8;   // 副文字
+var COLOR_TEXT_OFF    = 0x6B6480;   // 关闭态时间字色
+var COLOR_ACCENT      = 0x007DFF;   // 蓝色强调（开关 on / FAB）
+var COLOR_SWITCH_OFF  = 0x4A4360;
+var COLOR_KNOB        = 0xFFFFFF;
 
-var X_OFFSCREEN = 1000;
-var SLOT_COUNT  = 6;
+// ---- 闹钟数据模型 ----
+var alarms = [
+    { tag: "清晨", time: "6:55", sub: "闹钟，每天", on: false },
+    { tag: "早上", time: "8:20", sub: "早上好，每天", on: true  },
+    { tag: "早上", time: "8:30", sub: "早上好，每天", on: false }
+];
+var nextAlarmSeq = 100;   // 新建闹钟的 id 起点，避免和初始 0/1/2 冲突
 
-// ---- 状态 ----
-var view = 'list';            // 'list' | 'set' | 'modal'
-var firingSlot = -1;
-var draftMin = 5;
-var draftSec = 0;
-var slots = [];
-(function () {
+function alarmCardId(seq)    { return "alarm_" + seq; }
+function alarmSwitchId(seq)  { return "sw_"     + seq; }
+function alarmKnobId(seq)    { return "knob_"   + seq; }
+function alarmTimeId(seq)    { return "tm_"     + seq; }
+
+// ---- 状态行更新 ----
+function refreshStatus() {
+    var n = 0;
     var i;
-    for (i = 0; i < SLOT_COUNT; i++) {
-        slots.push({ active: false, triggerAtMs: 0 });
+    for (i = 0; i < alarms.length; i++) if (alarms[i].on) n++;
+    var msg = (n === 0) ? "所有闹钟已关闭" : ("已开启 " + n + " 个闹钟");
+    VDOM.set("statusLine", { text: msg });
+}
+
+// ---- 单张卡片视觉刷新（开/关状态切换） ----
+function refreshCard(seq) {
+    var idx = findIndexBySeq(seq);
+    if (idx < 0) return;
+    var on = alarms[idx].on;
+    // 时间字色：开 = 主白色，关 = 灰
+    VDOM.set(alarmTimeId(seq), { fg: on ? COLOR_TEXT : COLOR_TEXT_OFF });
+    // 滑块：on 时背景蓝、knob 推到右；off 时背景灰、knob 在左
+    VDOM.set(alarmSwitchId(seq), { bg: on ? COLOR_ACCENT : COLOR_SWITCH_OFF });
+    VDOM.set(alarmKnobId(seq),   { align: ['lm', on ? 18 : 2, 0] });
+}
+
+// 因为可以 destroy / 重建，alarms[] 索引和卡片 seq 不一一对应，做个反查
+function findIndexBySeq(seq) {
+    var i;
+    for (i = 0; i < alarms.length; i++) {
+        if (alarms[i].seq === seq) return i;
     }
-})();
-
-// ---- 视图切换：靠 align 把非当前 panel 推到屏外 ----
-function showView(name) {
-    view = name;
-    VDOM.set("listPanel",  { align: ['c', name === 'list'  ? 0 : X_OFFSCREEN, 0] });
-    VDOM.set("setPanel",   { align: ['c', name === 'set'   ? 0 : X_OFFSCREEN, 0] });
-    VDOM.set("modalPanel", { align: ['c', name === 'modal' ? 0 : X_OFFSCREEN, 0] });
-}
-
-// ---- 工具 ----
-function pad2(n) {
-    n = n | 0; if (n < 0) n = 0;
-    return n < 10 ? "0" + n : "" + n;
-}
-function fmtMS(totalSec) {
-    totalSec = totalSec | 0; if (totalSec < 0) totalSec = 0;
-    var m = (totalSec / 60) | 0;
-    var s = totalSec - m * 60;
-    if (m > 99) m = 99;
-    return pad2(m) + ":" + pad2(s);
-}
-function clampDraft() {
-    if (draftMin < 0)  draftMin = 0;
-    if (draftMin > 99) draftMin = 99;
-    if (draftSec < 0)  draftSec = 0;
-    if (draftSec > 59) draftSec = 59;
-}
-function refreshDraft() {
-    clampDraft();
-    VDOM.set("minVal", { text: pad2(draftMin) });
-    VDOM.set("secVal", { text: pad2(draftSec) });
-}
-
-// ---- slot 渲染 ----
-function paintSlot(i) {
-    var s = slots[i];
-    var prefix = "slot_" + i;
-    if (s.active) {
-        var remainMs  = s.triggerAtMs - sys.time.uptimeMs();
-        var remainSec = (remainMs + 999) / 1000 | 0;
-        if (remainSec < 0) remainSec = 0;
-        VDOM.set(prefix + "_ic", { fg: COLOR_ACTIVE });
-        VDOM.set(prefix + "_t",  { text: fmtMS(remainSec), fg: COLOR_TEXT });
-        VDOM.set(prefix + "_s",  { text: "Active", fg: COLOR_ACTIVE });
-    } else {
-        VDOM.set(prefix + "_ic", { fg: COLOR_DIM });
-        VDOM.set(prefix + "_t",  { text: "--:--", fg: COLOR_DIM });
-        VDOM.set(prefix + "_s",  { text: "Empty", fg: COLOR_DIM });
-    }
+    return -1;
 }
 
 // ---- 事件回调 ----
-function onAdd() {
-    if (view !== 'list') return;
-    draftMin = 5; draftSec = 0;
-    refreshDraft();
-    showView('set');
-}
-function onMinPlus()  { if (view === 'set') { draftMin += 1;  refreshDraft(); } }
-function onMinMinus() { if (view === 'set') { draftMin -= 1;  refreshDraft(); } }
-function onSecPlus()  { if (view === 'set') { draftSec += 10; refreshDraft(); } }
-function onSecMinus() { if (view === 'set') { draftSec -= 10; refreshDraft(); } }
-function onCancel()   { if (view === 'set') showView('list'); }
-
-function onSave() {
-    if (view !== 'set') return;
-    clampDraft();
-    var totalSec = draftMin * 60 + draftSec;
-    if (totalSec <= 0) { showView('list'); return; }
-    var i;
-    for (i = 0; i < SLOT_COUNT; i++) {
-        if (!slots[i].active) {
-            slots[i].active = true;
-            slots[i].triggerAtMs = sys.time.uptimeMs() + totalSec * 1000;
-            paintSlot(i);
-            showView('list');
-            return;
-        }
-    }
-    sys.log("timers: all slots full");
-    showView('list');
+function onSwitchClick(e) {
+    // e.target 是被点中的叶子（可能是滑块 knob 或 switch 本身）
+    // currentTarget 是当前正在执行 handler 的节点 —— 我们把 onClick 挂在 sw_ 上
+    var seq = parseInt(e.currentTarget.substring(3), 10);
+    var idx = findIndexBySeq(seq);
+    if (idx < 0) return;
+    alarms[idx].on = !alarms[idx].on;
+    refreshCard(seq);
+    refreshStatus();
 }
 
-function onDismiss() {
-    if (view !== 'modal') return;
-    if (firingSlot >= 0) {
-        slots[firingSlot].active = false;
-        slots[firingSlot].triggerAtMs = 0;
-        paintSlot(firingSlot);
-        firingSlot = -1;
-    }
-    showView('list');
+function onCardClick(e) {
+    // 长按删除：当前没 LONG_PRESS 事件，先用普通 click 演示 destroy
+    // 实际产品里这里应该是"打开编辑页"。删除从菜单出
+    // 这里我们让"点卡片本身（非滑块区域）" → 删除
+    // 注意冒泡顺序：滑块 onClick 先 stop，所以这里只接收非滑块区域点击
+    var seq = parseInt(e.currentTarget.substring(6), 10);  // alarm_<seq>
+    var idx = findIndexBySeq(seq);
+    if (idx < 0) return;
+    alarms.splice(idx, 1);
+    VDOM.destroy(alarmCardId(seq));
+    refreshStatus();
+    sys.log("alarm removed: seq=" + seq);
 }
 
-// ---- 构造 slot 子树（一个工厂） ----
-function makeSlotRow(idx) {
-    var prefix = "slot_" + idx;
+function onSwitchClickStop(e) {
+    onSwitchClick(e);
+    return false;   // 阻止冒泡到卡片，不会触发 onCardClick
+}
+
+function onAddClick() {
+    var newAlarm = {
+        tag: "上午", time: "9:00", sub: "闹钟，仅一次", on: true,
+        seq: nextAlarmSeq++
+    };
+    alarms.push(newAlarm);
+    mountAlarmCard(newAlarm);
+    refreshCard(newAlarm.seq);
+    refreshStatus();
+    sys.log("alarm added: seq=" + newAlarm.seq);
+}
+
+// ---- 卡片工厂 ----
+function makeAlarmCard(a) {
+    var seq = a.seq;
     return h('button', {
-        id: prefix,
-        size: [-100, 32],
+        id: alarmCardId(seq),
+        size: [-100, 56],
         bg: COLOR_CARD,
-        borderBottom: COLOR_CARD_ALT
+        radius: 14,
+        onClick: onCardClick
     }, [
-        h('label', { id: prefix+"_ic", text: sys.symbols.BELL, fg: COLOR_DIM,
-                     font: 'text', align: ['lm', 12, 0] }),
-        h('label', { id: prefix+"_t",  text: "--:--",          fg: COLOR_DIM,
-                     font: 'text', align: ['lm', 40, 0] }),
-        h('label', { id: prefix+"_s",  text: "Empty",          fg: COLOR_DIM,
-                     font: 'text', align: ['rm', -14, 0] })
+        // 左侧：时段小字 + 时间大字（同一行 baseline 对齐用 align 微调）
+        h('label', { id: "tag_" + seq,  text: a.tag, fg: COLOR_TEXT_DIM,
+                     font: 'text', align: ['lm', 14, -10] }),
+        h('label', { id: alarmTimeId(seq), text: a.time, fg: COLOR_TEXT,
+                     font: 'title', align: ['lm', 42, -10] }),
+        h('label', { id: "sub_" + seq, text: a.sub, fg: COLOR_TEXT_DIM,
+                     font: 'text', align: ['lm', 14, 14] }),
+        // 右侧 switch：button 当轨道，里面 knob label 当圆点
+        h('button', {
+            id: alarmSwitchId(seq),
+            size: [36, 22],
+            radius: 11,
+            bg: COLOR_SWITCH_OFF,
+            align: ['rm', -12, 0],
+            onClick: onSwitchClickStop
+        }, [
+            h('label', { id: alarmKnobId(seq), text: " ", bg: COLOR_KNOB,
+                         size: [16, 16], radius: 8,
+                         align: ['lm', 2, 0] })
+        ])
     ]);
 }
 
-// ---- 构造整棵 UI 树 ----
-sys.log("timers/vdom: build start");
+function mountAlarmCard(a) {
+    VDOM.mount(makeAlarmCard(a), "list");
+}
 
-// 先挂一个 appRoot 容器 —— 三个视图 panel 都做它的子节点。
-// 这样 attachRootListener 只需要在 appRoot 上注册一次，
-// 所有按钮点击都能冒泡到这里被捕获。
+// ---- 时钟 tick：把 uptimeMs 当作"演示时间" ----
+//   实际产品应读 RTC，但本 demo 不接入。直接用 uptime 秒数 mod 一天显示。
+function pad2(n) { n = n | 0; return n < 10 ? "0" + n : "" + n; }
+function refreshClock() {
+    var totalSec = (sys.time.uptimeMs() / 1000) | 0;
+    var s = totalSec % 60;
+    var m = (totalSec / 60 | 0) % 60;
+    var hh = (totalSec / 3600 | 0) % 24;
+    var period = (hh < 6) ? "凌晨"
+               : (hh < 12) ? "上午"
+               : (hh < 13) ? "中午"
+               : (hh < 18) ? "下午"
+               : "晚上";
+    VDOM.set("clockPeriod", { text: period });
+    VDOM.set("clockMain",   { text: pad2(hh) + ":" + pad2(m) + ":" + pad2(s) });
+}
+
+// ============================================================================
+// §3. 构造 UI 树
+// ============================================================================
+
+sys.log("alarm: build start");
+
+// 根容器
 VDOM.mount(
-    h('panel', { id: "appRoot", size: [-100,-100], bg: COLOR_BG }),
+    h('panel', { id: "appRoot", size: [-100, -100], bg: COLOR_BG }),
     null
 );
 
-// List 视图
-var slotRows = [];
-(function () { var i; for (i = 0; i < SLOT_COUNT; i++) slotRows.push(makeSlotRow(i)); })();
-
+// Header
 VDOM.mount(
-    h('panel', { id: "listPanel", size: [-100,-100], bg: COLOR_BG, flex: 'col' }, [
-        h('panel', { id: "hdr", size: [-100, 40], bg: COLOR_CARD }, [
-            h('label',  { id: "hdrTitle", text: "Timers", fg: COLOR_TEXT,
-                          font: 'title', align: ['lm', 14, 0] }),
-            h('button', { id: "addBtn", size: [36,32], bg: COLOR_ACCENT, radius: 8,
-                          align: ['rm', -8, 0], onClick: onAdd }, [
-                h('label', { id: "addBtnLbl", text: "+", fg: COLOR_TEXT,
-                             font: 'title', align: ['c', 0, 0] })
-            ])
-        ]),
-        h('panel', { id: "list", size: [-100, 192], bg: COLOR_CARD, flex: 'col' }, slotRows)
+    h('panel', { id: "header", size: [-100, 36], bg: COLOR_HEADER,
+                 align: ['tm', 0, 0] }, [
+        h('label', { id: "headerTitle", text: "闹钟", fg: COLOR_TEXT,
+                     font: 'title', align: ['lm', 14, 0] }),
+        // 右上"⋮"用 BARS 图标顶替（symbols 里没有 dots）
+        h('label', { id: "headerMore", text: sys.symbols.BARS, fg: COLOR_TEXT_DIM,
+                     font: 'text', align: ['rm', -14, 0] })
     ]),
     "appRoot"
 );
 
-// Set 视图
+// 时钟区
 VDOM.mount(
-    h('panel', { id: "setPanel", size: [-100,-100], bg: COLOR_BG,
-                 align: ['c', X_OFFSCREEN, 0] }, [
-        h('label', { id: "setTitle", text: "New Timer", fg: COLOR_TEXT,
-                     font: 'title', align: ['tm', 0, 10] }),
-        // Minutes column
-        h('button', { id: "minPlus", size: [44,34], bg: COLOR_CARD, radius: 8,
-                      align: ['c', -48, -48], onClick: onMinPlus }, [
-            h('label', { id: "minPlusL", text: "+", fg: COLOR_ACCENT,
-                         font: 'title', align: ['c', 0, 0] })
-        ]),
-        h('label', { id: "minVal", text: "05", fg: COLOR_TEXT,
-                     font: 'huge', align: ['c', -48, 0] }),
-        h('button', { id: "minMinus", size: [44,34], bg: COLOR_CARD, radius: 8,
-                      align: ['c', -48, 48], onClick: onMinMinus }, [
-            h('label', { id: "minMinusL", text: "-", fg: COLOR_ACCENT,
-                         font: 'title', align: ['c', 0, 0] })
-        ]),
-        h('label', { id: "minLbl", text: "Min", fg: COLOR_DIM,
-                     font: 'text', align: ['c', -48, 80] }),
-        // Colon
-        h('label', { id: "colon", text: ":", fg: COLOR_TEXT,
-                     font: 'huge', align: ['c', 0, 0] }),
-        // Seconds column
-        h('button', { id: "secPlus", size: [44,34], bg: COLOR_CARD, radius: 8,
-                      align: ['c', 48, -48], onClick: onSecPlus }, [
-            h('label', { id: "secPlusL", text: "+", fg: COLOR_ACCENT,
-                         font: 'title', align: ['c', 0, 0] })
-        ]),
-        h('label', { id: "secVal", text: "00", fg: COLOR_TEXT,
-                     font: 'huge', align: ['c', 48, 0] }),
-        h('button', { id: "secMinus", size: [44,34], bg: COLOR_CARD, radius: 8,
-                      align: ['c', 48, 48], onClick: onSecMinus }, [
-            h('label', { id: "secMinusL", text: "-", fg: COLOR_ACCENT,
-                         font: 'title', align: ['c', 0, 0] })
-        ]),
-        h('label', { id: "secLbl", text: "Sec", fg: COLOR_DIM,
-                     font: 'text', align: ['c', 48, 80] }),
-        // Bottom buttons
-        h('button', { id: "cancelBtn", size: [90,36], bg: COLOR_CARD, radius: 8,
-                      align: ['bl', 14, -14], onClick: onCancel }, [
-            h('label', { id: "cancelL", text: "Cancel", fg: COLOR_TEXT,
-                         font: 'text', align: ['c', 0, 0] })
-        ]),
-        h('button', { id: "saveBtn", size: [90,36], bg: COLOR_ACCENT, radius: 8,
-                      align: ['br', -14, -14], onClick: onSave }, [
-            h('label', { id: "saveL", text: "Save", fg: COLOR_TEXT,
-                         font: 'text', align: ['c', 0, 0] })
-        ])
+    h('panel', { id: "clockArea", size: [-100, 80], bg: COLOR_BG,
+                 align: ['tm', 0, 36] }, [
+        h('label', { id: "clockPeriod", text: "上午", fg: COLOR_TEXT_DIM,
+                     font: 'text', align: ['c', -82, -2] }),
+        h('label', { id: "clockMain", text: "00:00:00", fg: COLOR_TEXT,
+                     font: 'huge', align: ['c', 14, 0] })
     ]),
     "appRoot"
 );
 
-// Modal 视图
+// 状态行
 VDOM.mount(
-    h('panel', { id: "modalPanel", size: [-100,-100], bg: COLOR_CARD,
-                 align: ['c', X_OFFSCREEN, 0] }, [
-        h('label', { id: "modalIcon",  text: sys.symbols.BELL, fg: COLOR_DANGER,
-                     font: 'huge',  align: ['c', 0, -50] }),
-        h('label', { id: "modalTitle", text: "Time's up!",     fg: COLOR_TEXT,
-                     font: 'title', align: ['c', 0, 0] }),
-        h('label', { id: "modalSub",   text: "--:--",          fg: COLOR_DIM,
-                     font: 'text',  align: ['c', 0, 28] }),
-        h('button', { id: "dismissBtn", size: [120,40], bg: COLOR_DANGER, radius: 10,
-                      align: ['c', 0, 60], onClick: onDismiss }, [
-            h('label', { id: "dismissL", text: "Dismiss", fg: COLOR_TEXT,
-                         font: 'text', align: ['c', 0, 0] })
-        ])
+    h('panel', { id: "statusBar", size: [-100, 20], bg: COLOR_BG,
+                 align: ['tm', 0, 116] }, [
+        h('label', { id: "statusLine", text: "...", fg: COLOR_TEXT_DIM,
+                     font: 'text', align: ['c', 0, 0] })
     ]),
     "appRoot"
 );
 
-// 一次性挂载 root listener，所有按钮点击通过这条总干线回到 JS。
+// 列表区（panel 默认 SCROLLABLE 开着，超过高度可滑动）
+VDOM.mount(
+    h('panel', { id: "list", size: [-100, 140], bg: COLOR_BG, flex: 'col',
+                 align: ['tm', 0, 136],
+                 pad: [8, 4, 8, 4] }),
+    "appRoot"
+);
+
+// 初始 3 张卡片（给它们补上 seq）
+(function () {
+    var i;
+    for (i = 0; i < alarms.length; i++) {
+        alarms[i].seq = i;   // 0/1/2
+        mountAlarmCard(alarms[i]);
+    }
+})();
+
+// FAB +
+VDOM.mount(
+    h('button', { id: "fab", size: [44, 44], radius: 22, bg: COLOR_ACCENT,
+                  align: ['bm', 0, -8], onClick: onAddClick }, [
+        h('label', { id: "fabL", text: "+", fg: COLOR_TEXT,
+                     font: 'huge', align: ['c', 0, -4] })
+    ]),
+    "appRoot"
+);
+
+// 一次性挂载 root listener
 sys.ui.attachRootListener("appRoot");
 
-// 初始化显示
-showView('list');
-(function () { var i; for (i = 0; i < SLOT_COUNT; i++) paintSlot(i); })();
-
-// 每秒 tick：刷新活跃 slot + 检查到期
-setInterval(function () {
-    var now = sys.time.uptimeMs();
+// 初始刷新
+refreshClock();
+refreshStatus();
+(function () {
     var i;
-    for (i = 0; i < SLOT_COUNT; i++) {
-        if (slots[i].active) paintSlot(i);
-    }
-    if (view !== 'modal') {
-        for (i = 0; i < SLOT_COUNT; i++) {
-            if (slots[i].active && slots[i].triggerAtMs <= now) {
-                firingSlot = i;
-                VDOM.set("modalSub", { text: "Slot " + (i + 1) });
-                showView('modal');
-                break;
-            }
-        }
-    }
-}, 1000);
+    for (i = 0; i < alarms.length; i++) refreshCard(alarms[i].seq);
+})();
 
-sys.log("timers/vdom: build done");
+// 时钟每秒走一下
+setInterval(refreshClock, 1000);
+
+sys.log("alarm: build done");

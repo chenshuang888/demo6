@@ -236,6 +236,28 @@ static JSValue js_sys_ui_attach_root_listener(JSContext *ctx, JSValue *this_val,
     return JS_NewBool(ok ? 1 : 0);
 }
 
+/* sys.ui.destroy(id)
+ *
+ *   销毁单个对象。约定 JS 侧（VDOM.destroy）自底向上递归调用，
+ *   保证子节点的 registry slot 先被释放，再销毁父节点。
+ *   C 侧只负责"删一个 LVGL obj + 释放一个 slot"，不做递归判断。
+ */
+static JSValue js_sys_ui_destroy(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "sys.ui.destroy(id) args missing");
+    }
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+
+    bool ok = dynamic_app_ui_enqueue_destroy(id, id_len);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
 /* sys.__setDispatcher(fn)
  *
  *   JS 侧注册一个全局 dispatcher 函数，C 侧用 GCRef 持有。
@@ -457,11 +479,12 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_ui_create_button        = (int)base_count + 4;
     rt->func_idx_sys_ui_set_style            = (int)base_count + 5;
     rt->func_idx_sys_ui_attach_root_listener = (int)base_count + 6;
-    rt->func_idx_sys_set_dispatcher          = (int)base_count + 7;
-    rt->func_idx_sys_time_uptime_ms          = (int)base_count + 8;
-    rt->func_idx_sys_time_uptime_str         = (int)base_count + 9;
-    rt->func_idx_set_interval                = (int)base_count + 10;
-    rt->func_idx_clear_interval              = (int)base_count + 11;
+    rt->func_idx_sys_ui_destroy              = (int)base_count + 7;
+    rt->func_idx_sys_set_dispatcher          = (int)base_count + 8;
+    rt->func_idx_sys_time_uptime_ms          = (int)base_count + 9;
+    rt->func_idx_sys_time_uptime_str         = (int)base_count + 10;
+    rt->func_idx_set_interval                = (int)base_count + 11;
+    rt->func_idx_clear_interval              = (int)base_count + 12;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -471,6 +494,7 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_ui_create_button,        js_sys_ui_create_button,        2);
     DEF_CFN(func_idx_sys_ui_set_style,            js_sys_ui_set_style,            6);
     DEF_CFN(func_idx_sys_ui_attach_root_listener, js_sys_ui_attach_root_listener, 1);
+    DEF_CFN(func_idx_sys_ui_destroy,              js_sys_ui_destroy,              1);
     DEF_CFN(func_idx_sys_set_dispatcher,          js_sys_set_dispatcher,          1);
     DEF_CFN(func_idx_sys_time_uptime_ms,          js_sys_time_uptime_ms,          0);
     DEF_CFN(func_idx_sys_time_uptime_str,         js_sys_time_uptime_str,         0);
@@ -516,6 +540,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(ui, "createButton",       func_idx_sys_ui_create_button);
     BIND_FN(ui, "setStyle",           func_idx_sys_ui_set_style);
     BIND_FN(ui, "attachRootListener", func_idx_sys_ui_attach_root_listener);
+    BIND_FN(ui, "destroy",            func_idx_sys_ui_destroy);
 
     /* sys.time.* */
     BIND_FN(time, "uptimeMs",  func_idx_sys_time_uptime_ms);

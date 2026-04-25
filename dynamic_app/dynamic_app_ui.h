@@ -42,6 +42,7 @@ typedef enum {
     DYNAMIC_APP_UI_CMD_CREATE_BUTTON,
     DYNAMIC_APP_UI_CMD_SET_STYLE,
     DYNAMIC_APP_UI_CMD_ATTACH_ROOT_LISTENER,   /* 在 root 上挂一个总 cb */
+    DYNAMIC_APP_UI_CMD_DESTROY,                /* 删除单个 obj 并释放 registry slot */
 } dynamic_app_ui_cmd_type_t;
 
 /*
@@ -113,6 +114,12 @@ bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
  * 子对象冒泡上来的 click 都从这里捕获，事件入队时携带"被点中对象"的 id。
  * 通常脚本会对最外层 root container 调一次。 */
 bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len);
+
+/* 销毁单个对象：lv_obj_del(obj) + 释放 registry slot。
+ * 调用方（JS VDOM.destroy）负责自底向上递归，C 侧只处理一个 id。
+ * 防御：若 JS 没递归就直接 destroy 父对象，LVGL 会级联删子对象，
+ *       此时遗留 slot 会在 drain 的 lv_obj_is_valid 检查里被清。 */
+bool dynamic_app_ui_enqueue_destroy(const char *id, size_t id_len);
 
 /* ---------------- UI -> Script ---------------- */
 

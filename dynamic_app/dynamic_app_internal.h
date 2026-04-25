@@ -81,6 +81,7 @@ typedef struct {
     int func_idx_sys_ui_create_button;
     int func_idx_sys_ui_set_style;
     int func_idx_sys_ui_attach_root_listener;
+    int func_idx_sys_ui_destroy;
     int func_idx_sys_set_dispatcher;
     int func_idx_sys_time_uptime_ms;
     int func_idx_sys_time_uptime_str;
