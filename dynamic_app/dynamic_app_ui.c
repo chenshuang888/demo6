@@ -5,7 +5,7 @@
  *   1. 持有共享全局状态（s_ui_queue / s_event_queue / s_root / s_registry / fonts）
  *   2. 接收脚本入队的命令（enqueue_*）
  *   3. UI Task 主循环里 drain 命令并分发：CREATE / SET_TEXT / SET_STYLE / ATTACH_ROOT_LISTENER
- *   4. 反向事件入队（on_lv_root_click）+ 出队（pop_event）
+ *   4. 反向事件入队（on_lv_root_event）+ 出队（pop_event）
  *   5. 生命周期：init / set_root / set_fonts / unregister_all / clear_event_queue
  *
  * 不做的事：
@@ -25,6 +25,7 @@
 #include "dynamic_app_ui.h"
 #include "dynamic_app_ui_internal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -46,6 +47,15 @@ ui_registry_entry_t  s_registry[DYNAMIC_APP_UI_REGISTRY_MAX];
 const lv_font_t *s_font_text  = NULL;
 const lv_font_t *s_font_title = NULL;
 const lv_font_t *s_font_huge  = NULL;
+
+/* 当前手势会话状态（同时只有一根手指，单 indev 假设）。
+ * 在 root listener 的 PRESSED 中记录，PRESSING 累计位移，
+ * RELEASED 清空。unregister_all 也会清，避免残留指针。 */
+static struct {
+    lv_obj_t *active_target;
+    char      active_id[DYNAMIC_APP_UI_ID_MAX_LEN];
+    int16_t   acc_dx, acc_dy;
+} s_gesture = { .active_target = NULL };
 
 /* ============================================================================
  * §2. 生命周期
@@ -75,6 +85,10 @@ void dynamic_app_ui_unregister_all(void)
 {
     /* LVGL 对象本身由页面 lv_obj_del(screen) 级联释放，这里只清 registry。 */
     memset(s_registry, 0, sizeof(s_registry));
+    /* 手势状态也清，避免下次进 app 时残留指针 */
+    s_gesture.active_target = NULL;
+    s_gesture.active_id[0] = '\0';
+    s_gesture.acc_dx = s_gesture.acc_dy = 0;
     dynamic_app_ui_clear_event_queue();
 }
 
@@ -197,31 +211,88 @@ bool dynamic_app_ui_enqueue_destroy(const char *id, size_t id_len)
 /* ============================================================================
  * §5. UI→Script 反向事件
  *
- *   on_lv_root_click 在 LVGL UI 线程上下文执行：绝不能 JS_Call，只能入队。
+ *   on_lv_root_event 在 LVGL UI 线程上下文执行：绝不能 JS_Call，只能入队。
  *   pop_event 由 Script Task 主循环调用。
  *
- *   点击沿 LVGL 父链冒泡到 root，cb 里用 lv_event_get_target 拿到被点
- *   的真正子对象，反查 registry 得到 node_id 字符串，一起入队。
+ *   一个 cb 处理 4 种 LVGL 事件：
+ *     PRESSED   → EV_PRESS   记录按下对象，重置累计位移
+ *     PRESSING  → EV_DRAG    每帧从 indev 拿增量，累计 ≥2px 才入队
+ *     RELEASED  → EV_RELEASE 释放按下对象
+ *     CLICKED   → EV_CLICK   LVGL 已保证只在没拖动时触发
+ *
+ *   PRESSING/RELEASED 的 target 用按下时记下的，避免手指拖出按钮范围
+ *   后 LVGL 报错 target 导致业务接到不一致的 id。
  * ========================================================================= */
 
-static void on_lv_root_click(lv_event_t *e)
+/* 当前手势会话状态（同时只有一根手指，单 indev 假设）
+ * 定义在文件顶部 s_gesture，这里的 cb 直接读写。 */
+
+#define DRAG_THRESHOLD_PX  2
+
+static void enqueue_event(uint8_t type, const char *id, int16_t dx, int16_t dy)
 {
-    if (!s_event_queue) return;
-
-    /* target = 冒泡起点的叶子对象；current_target = 挂 cb 的 root 本身。
-     * 这里需要叶子，才能把"被点中是谁"告诉 JS。
-     * LVGL v9 用 lv_event_get_target_obj 显式拿 lv_obj_t*。 */
-    lv_obj_t *target = lv_event_get_target_obj(e);
-    if (!target) return;
-
-    int slot = registry_find_by_obj(target);
-    if (slot < 0) return;   /* 非 registry 管辖的对象，忽略 */
-
+    if (!s_event_queue || !id || id[0] == '\0') return;
     dynamic_app_ui_event_t ev = {0};
-    strncpy(ev.node_id, s_registry[slot].id, sizeof(ev.node_id) - 1);
+    ev.type = type;
+    ev.dx = dx;
+    ev.dy = dy;
+    strncpy(ev.node_id, id, sizeof(ev.node_id) - 1);
     ev.node_id[sizeof(ev.node_id) - 1] = '\0';
-
     (void)xQueueSend(s_event_queue, &ev, 0);
+}
+
+static void on_lv_root_event(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_obj_t *target = lv_event_get_target_obj(e);
+        if (!target) return;
+        int slot = registry_find_by_obj(target);
+        if (slot < 0) return;
+        s_gesture.active_target = target;
+        s_gesture.acc_dx = s_gesture.acc_dy = 0;
+        strncpy(s_gesture.active_id, s_registry[slot].id,
+                sizeof(s_gesture.active_id) - 1);
+        s_gesture.active_id[sizeof(s_gesture.active_id) - 1] = '\0';
+        enqueue_event(DYNAMIC_APP_UI_EV_PRESS, s_gesture.active_id, 0, 0);
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING) {
+        if (!s_gesture.active_target) return;
+        lv_indev_t *indev = lv_indev_active();
+        if (!indev) return;
+        lv_point_t v = {0};
+        lv_indev_get_vect(indev, &v);
+        s_gesture.acc_dx += (int16_t)v.x;
+        s_gesture.acc_dy += (int16_t)v.y;
+        if (abs(s_gesture.acc_dx) + abs(s_gesture.acc_dy) >= DRAG_THRESHOLD_PX) {
+            enqueue_event(DYNAMIC_APP_UI_EV_DRAG, s_gesture.active_id,
+                          s_gesture.acc_dx, s_gesture.acc_dy);
+            s_gesture.acc_dx = s_gesture.acc_dy = 0;
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED) {
+        if (!s_gesture.active_target) return;
+        enqueue_event(DYNAMIC_APP_UI_EV_RELEASE, s_gesture.active_id, 0, 0);
+        s_gesture.active_target = NULL;
+        s_gesture.active_id[0] = '\0';
+        return;
+    }
+
+    if (code == LV_EVENT_CLICKED) {
+        /* CLICKED 只在没拖动时触发；用 LVGL 报告的 target，
+         * 因为 active_target 在 RELEASED 已清。 */
+        lv_obj_t *target = lv_event_get_target_obj(e);
+        if (!target) return;
+        int slot = registry_find_by_obj(target);
+        if (slot < 0) return;
+        enqueue_event(DYNAMIC_APP_UI_EV_CLICK, s_registry[slot].id, 0, 0);
+        return;
+    }
 }
 
 bool dynamic_app_ui_pop_event(dynamic_app_ui_event_t *out)
@@ -246,7 +317,7 @@ void dynamic_app_ui_clear_event_queue(void)
  *     CREATE_LABEL / PANEL / BUTTON → do_create()
  *     SET_TEXT             → 查 registry → lv_label_set_text
  *     SET_STYLE            → 查 registry → apply_style()  [styles.c]
- *     ATTACH_ROOT_LISTENER → 查 registry → lv_obj_add_event_cb(on_lv_root_click)
+ *     ATTACH_ROOT_LISTENER → 查 registry → lv_obj_add_event_cb(on_lv_root_event ×4)
  *     DESTROY              → 查 registry → lv_obj_del + slot.used=false
  * ========================================================================= */
 
@@ -381,8 +452,11 @@ void dynamic_app_ui_drain(int max_count)
                     s_registry[slot].obj = NULL;
                     break;
                 }
-                /* user_data 不用，target 信息从 lv_event_get_target 取 */
-                lv_obj_add_event_cb(obj, on_lv_root_click, LV_EVENT_CLICKED, NULL);
+                /* 一个 cb 订四种事件，cb 内部按 code 分发 */
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_PRESSED,  NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_PRESSING, NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_RELEASED, NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_CLICKED,  NULL);
                 break;
             }
 

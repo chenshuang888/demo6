@@ -215,7 +215,7 @@ static JSValue js_sys_ui_set_style(JSContext *ctx, JSValue *this_val, int argc, 
 /* sys.ui.attachRootListener(id)
  *
  *   事件委托入口：在指定 id 对象上挂一个 LVGL cb。
- *   之后所有冒泡到该对象的 LV_EVENT_CLICKED，都会被 on_lv_root_click 捕获，
+ *   之后所有冒泡到该对象的指针事件，都会被 on_lv_root_event 捕获，
  *   然后以"被点中真子对象的 id"为 payload 入队，由 sys.__setDispatcher
  *   注册的 JS 函数派发。
  *   不持有 JS 函数引用 —— dispatcher 是脚本侧的全局函数。
@@ -414,11 +414,15 @@ int64_t dynamic_app_next_interval_deadline_ms(int64_t cur_ms)
 
 void dynamic_app_drain_ui_events_once(JSContext *ctx)
 {
-    /* 每 tick 最多消 8 个点击事件，避免大量回调阻塞主循环。
+    /* 每 tick 最多消 8 个事件，避免大量回调阻塞主循环。
      *
      * root delegation 路径：
-     *   on_lv_root_click 把"被点中对象的 id"放进 ev.node_id 入队，
-     *   这里把 id 作为字符串参数传给 sys.__setDispatcher 注册的 JS 函数。
+     *   on_lv_root_event 把 { type, dx, dy, node_id } 入队，
+     *   这里调用 sys.__setDispatcher 注册的 JS 函数：
+     *     dispatcher(node_id, type, dx, dy)
+     *
+     *   esp-mquickjs 栈约定：push 顺序是 argN ... arg1, fn, this
+     *   （从栈底到栈顶），栈顶是 this。
      */
     int budget = 8;
     dynamic_app_ui_event_t ev;
@@ -426,21 +430,22 @@ void dynamic_app_drain_ui_events_once(JSContext *ctx)
         if (ev.node_id[0] == '\0') continue;
         if (!s_rt.dispatcher_allocated) continue;
 
-        /* 用 GCRef 持有 fn，避开"esp-mquickjs 顶层 this 为 undefined
-         * 拿不到全局对象"的问题。
-         *
-         * esp-mquickjs 栈约定（见 managed_components/.../example.c::js_rectangle_call）：
-         *   push 顺序：argN ... arg1, fn, this  （从栈底到栈顶）
-         *   栈顶是 this，往下 fn，再往下是参数。 */
-        if (JS_StackCheck(ctx, 3)) {
+        if (JS_StackCheck(ctx, 6)) {
             dynamic_app_dump_exception(ctx);
             return;
         }
-        JSValue arg = JS_NewString(ctx, ev.node_id);
-        JS_PushArg(ctx, arg);                    /* arg1 先 push（最深） */
+        JSValue arg_id   = JS_NewString(ctx, ev.node_id);
+        JSValue arg_type = JS_NewInt32(ctx, (int)ev.type);
+        JSValue arg_dx   = JS_NewInt32(ctx, (int)ev.dx);
+        JSValue arg_dy   = JS_NewInt32(ctx, (int)ev.dy);
+
+        JS_PushArg(ctx, arg_dy);                 /* arg4 最深 */
+        JS_PushArg(ctx, arg_dx);                 /* arg3 */
+        JS_PushArg(ctx, arg_type);               /* arg2 */
+        JS_PushArg(ctx, arg_id);                 /* arg1 */
         JS_PushArg(ctx, s_rt.dispatcher.val);    /* fn */
-        JS_PushArg(ctx, JS_NULL);                /* this 最后 push（栈顶） */
-        JSValue ret = JS_Call(ctx, 1);
+        JS_PushArg(ctx, JS_NULL);                /* this 栈顶 */
+        JSValue ret = JS_Call(ctx, 4);
         if (JS_IsException(ret)) {
             dynamic_app_dump_exception(ctx);
         }

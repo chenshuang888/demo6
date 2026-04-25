@@ -74,9 +74,21 @@ typedef struct {
     } u;
 } dynamic_app_ui_command_t;
 
+/* 反向事件（UI → Script）的类型。
+ * 与 JS 侧 dispatcher 的 type 参数一一对应，数值不能改。 */
+typedef enum {
+    DYNAMIC_APP_UI_EV_CLICK   = 1,
+    DYNAMIC_APP_UI_EV_PRESS   = 2,
+    DYNAMIC_APP_UI_EV_DRAG    = 3,
+    DYNAMIC_APP_UI_EV_RELEASE = 4,
+} dynamic_app_ui_event_type_t;
+
 typedef struct {
-    /* root delegation 路径：被点中对象的 id 字符串 */
-    char node_id[DYNAMIC_APP_UI_ID_MAX_LEN];
+    uint8_t type;                                  /* dynamic_app_ui_event_type_t */
+    int16_t dx, dy;                                /* 仅 DRAG 用，其它事件为 0 */
+    char    node_id[DYNAMIC_APP_UI_ID_MAX_LEN];    /* PRESS 时为按下对象，
+                                                      DRAG/RELEASE 时为按下时记录的对象，
+                                                      CLICK 时为 LVGL 报告的 target */
 } dynamic_app_ui_event_t;
 
 /* ---------------- 生命周期 ---------------- */
