@@ -293,6 +293,14 @@ static void on_lv_root_event(lv_event_t *e)
         enqueue_event(DYNAMIC_APP_UI_EV_CLICK, s_registry[slot].id, 0, 0);
         return;
     }
+
+    if (code == LV_EVENT_LONG_PRESSED) {
+        /* LVGL 默认 ~400ms 触发；与 PRESSED 共享 active_target，
+         * 没拖动时才发（拖过会被 LVGL 自己抑制） */
+        if (!s_gesture.active_target) return;
+        enqueue_event(DYNAMIC_APP_UI_EV_LONG_PRESS, s_gesture.active_id, 0, 0);
+        return;
+    }
 }
 
 bool dynamic_app_ui_pop_event(dynamic_app_ui_event_t *out)
@@ -357,10 +365,13 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
         case UI_OBJ_PANEL: {
             obj = lv_obj_create(parent);
             lv_obj_remove_style_all(obj);
-            /* 默认透明、无边框、无 pad；保留 SCROLLABLE，脚本可后续覆盖 */
+            /* 默认透明、无边框、无 pad；脚本可后续覆盖 */
             lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(obj, 0, 0);
             lv_obj_set_style_pad_all(obj, 0, 0);
+            /* 默认禁用滚动：嵌套页面里多个 panel 同时 scrollable
+             * 会出现"页面内容意外被推走"的怪象。需要滚动时业务自己开。 */
+            lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
             break;
         }
         case UI_OBJ_BUTTON: {
@@ -383,6 +394,12 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
      * LVGL 默认 EVENT_BUBBLE 关闭 —— 子对象的事件不会触发父级 cb。
      * 我们这里统一开启，root listener 才能收到所有子按钮的点击。 */
     lv_obj_add_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    /* 默认开启 PRESS_LOCK：手指按下后即使移出 obj 范围，PRESSING/RELEASED
+     * 仍持续发给该 obj。LVGL 默认只 button 自带这个 flag；label/panel 没有，
+     * 导致用户按在卡片内的子 label 上稍微一动 LVGL 就视为 release，
+     * 我们的手势状态机会立即回弹。统一开启此 flag 后，按在哪都能拖。 */
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_PRESS_LOCK);
 
     if (registry_alloc(cmd->id, type, obj) < 0) {
         ESP_LOGW(TAG, "UI registry full, drop create id=%s", cmd->id);
@@ -453,10 +470,11 @@ void dynamic_app_ui_drain(int max_count)
                     break;
                 }
                 /* 一个 cb 订四种事件，cb 内部按 code 分发 */
-                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_PRESSED,  NULL);
-                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_PRESSING, NULL);
-                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_RELEASED, NULL);
-                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_CLICKED,  NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_PRESSED,      NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_PRESSING,     NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_RELEASED,     NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_CLICKED,      NULL);
+                lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_LONG_PRESSED, NULL);
                 break;
             }
 

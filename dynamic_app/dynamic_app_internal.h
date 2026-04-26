@@ -87,6 +87,9 @@ typedef struct {
     int func_idx_sys_time_uptime_str;
     int func_idx_set_interval;
     int func_idx_clear_interval;
+    int func_idx_sys_app_save_state;
+    int func_idx_sys_app_load_state;
+    int func_idx_sys_app_erase_state;
 } dynamic_app_runtime_t;
 
 /* 全局唯一实例。定义在 dynamic_app.c。 */

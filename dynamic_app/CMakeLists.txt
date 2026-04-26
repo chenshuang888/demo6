@@ -19,4 +19,5 @@ idf_component_register(
         esp_timer
         lvgl
         esp-mquickjs
+        storage
 )

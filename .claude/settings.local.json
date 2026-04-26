@@ -26,7 +26,10 @@
       "Bash(sort -k6,7)",
       "Bash(mkdir -p services/manager)",
       "Bash(mv services/time_manager.c services/time_manager.h services/weather_manager.c services/weather_manager.h services/notify_manager.c services/notify_manager.h services/media_manager.c services/media_manager.h services/system_manager.c services/system_manager.h services/manager/)",
-      "Bash(grep -nB1 -A4 \"JS_Call\\\\b\" managed_components/makgordon__esp-mquickjs/mquickjs.h)"
+      "Bash(grep -nB1 -A4 \"JS_Call\\\\b\" managed_components/makgordon__esp-mquickjs/mquickjs.h)",
+      "Bash(node -c dynamic_app/scripts/app.js)",
+      "Bash(node --check dynamic_app/scripts/app.js)",
+      "WebFetch(domain:docs.espressif.com)"
     ]
   }
 }

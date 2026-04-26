@@ -23,8 +23,10 @@
 
 #include "dynamic_app_internal.h"
 #include "dynamic_app_ui.h"
+#include "persist.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -358,6 +360,104 @@ static JSValue js_clear_interval(JSContext *ctx, JSValue *this_val, int argc, JS
 }
 
 /* ============================================================================
+ * §5b. JS Native：sys.app.* （持久化）
+ *
+ *   设计：
+ *     - JS 侧自己 JSON.stringify/parse；C 侧只是个 string ↔ NVS blob 的搬运工
+ *     - 同步调用：返回值生效就是真落盘/真读出。线程上下文是 Script Task，
+ *       NVS API 自带锁，无需队列
+ *     - namespace 固定 "dynapp"，key 固定 "state"。将来支持多 app 时
+ *       由调用方传 key（或这层在 setup 时记下 script name）
+ *     - 4KB 上限：NVS blob 上限 ~4000B，闹钟 state JSON ~几百字节足够
+ * ========================================================================= */
+
+#define DYNAPP_NS         "dynapp"
+#define DYNAPP_STATE_KEY  "state"
+#define DYNAPP_STATE_MAX  4000   /* 留出 NVS 元信息空间 */
+
+/* sys.app.saveState(jsonString) -> bool
+ *   传入 JSON 字符串，写入 NVS。成功返回 true。
+ */
+static JSValue js_sys_app_save_state(JSContext *ctx, JSValue *this_val,
+                                     int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.app.saveState(jsonString): need string");
+    }
+
+    JSCStringBuf buf;
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, argv[0], &buf);
+    if (!s) return JS_EXCEPTION;
+
+    if (len > DYNAPP_STATE_MAX) {
+        ESP_LOGW(TAG, "saveState: payload %u B exceeds %u, dropped",
+                 (unsigned)len, (unsigned)DYNAPP_STATE_MAX);
+        return JS_NewBool(0);
+    }
+
+    esp_err_t err = persist_set_blob(DYNAPP_NS, DYNAPP_STATE_KEY, s, len);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "saveState NVS err=0x%x", err);
+        return JS_NewBool(0);
+    }
+    return JS_NewBool(1);
+}
+
+/* sys.app.loadState() -> string | null
+ *   读出 JSON 字符串。无数据返回 null（首次启动）。
+ */
+static JSValue js_sys_app_load_state(JSContext *ctx, JSValue *this_val,
+                                     int argc, JSValue *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+
+    /* 第一次调 nvs_get_blob 用 NULL 探测长度 */
+    size_t len = 0;
+    esp_err_t err = persist_get_blob(DYNAPP_NS, DYNAPP_STATE_KEY, NULL, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND || len == 0) {
+        return JS_NULL;
+    }
+    if (err != ESP_OK && err != ESP_ERR_NVS_INVALID_LENGTH) {
+        ESP_LOGW(TAG, "loadState probe err=0x%x", err);
+        return JS_NULL;
+    }
+    if (len > DYNAPP_STATE_MAX) {
+        ESP_LOGW(TAG, "loadState: blob %u B too large, dropped", (unsigned)len);
+        return JS_NULL;
+    }
+
+    char *tmp = (char *)malloc(len + 1);
+    if (!tmp) {
+        ESP_LOGW(TAG, "loadState malloc %u failed", (unsigned)len);
+        return JS_NULL;
+    }
+    err = persist_get_blob(DYNAPP_NS, DYNAPP_STATE_KEY, tmp, &len);
+    if (err != ESP_OK) {
+        free(tmp);
+        ESP_LOGW(TAG, "loadState read err=0x%x", err);
+        return JS_NULL;
+    }
+    tmp[len] = '\0';
+
+    JSValue v = JS_NewStringLen(ctx, tmp, len);
+    free(tmp);
+    return v;
+}
+
+/* sys.app.eraseState() -> bool
+ *   抹掉持久化数据，方便业务重置 / 测试。
+ */
+static JSValue js_sys_app_erase_state(JSContext *ctx, JSValue *this_val,
+                                      int argc, JSValue *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    esp_err_t err = persist_erase_namespace(DYNAPP_NS);
+    return JS_NewBool(err == ESP_OK ? 1 : 0);
+}
+
+/* ============================================================================
  * §6. tick 循环服务
  *
  *   被 dynamic_app.c 的 script_task 主循环周期性调用。
@@ -490,6 +590,9 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_time_uptime_str         = (int)base_count + 10;
     rt->func_idx_set_interval                = (int)base_count + 11;
     rt->func_idx_clear_interval              = (int)base_count + 12;
+    rt->func_idx_sys_app_save_state          = (int)base_count + 13;
+    rt->func_idx_sys_app_load_state          = (int)base_count + 14;
+    rt->func_idx_sys_app_erase_state         = (int)base_count + 15;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -505,6 +608,9 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_time_uptime_str,         js_sys_time_uptime_str,         0);
     DEF_CFN(func_idx_set_interval,                js_set_interval,                2);
     DEF_CFN(func_idx_clear_interval,              js_clear_interval,              1);
+    DEF_CFN(func_idx_sys_app_save_state,          js_sys_app_save_state,          1);
+    DEF_CFN(func_idx_sys_app_load_state,          js_sys_app_load_state,          0);
+    DEF_CFN(func_idx_sys_app_erase_state,         js_sys_app_erase_state,         0);
 }
 
 #undef DEF_CFN
@@ -533,6 +639,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     JSValue sys     = JS_NewObject(ctx);
     JSValue ui      = JS_NewObject(ctx);
     JSValue time    = JS_NewObject(ctx);
+    JSValue app     = JS_NewObject(ctx);
     JSValue symbols = JS_NewObject(ctx);
     JSValue style   = JS_NewObject(ctx);
     JSValue align   = JS_NewObject(ctx);
@@ -550,6 +657,11 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     /* sys.time.* */
     BIND_FN(time, "uptimeMs",  func_idx_sys_time_uptime_ms);
     BIND_FN(time, "uptimeStr", func_idx_sys_time_uptime_str);
+
+    /* sys.app.* —— 持久化 */
+    BIND_FN(app, "saveState",  func_idx_sys_app_save_state);
+    BIND_FN(app, "loadState",  func_idx_sys_app_load_state);
+    BIND_FN(app, "eraseState", func_idx_sys_app_erase_state);
 
     /* sys.symbols.* —— LVGL 内置 UTF-8 图标字面量 */
     (void)JS_SetPropertyStr(ctx, symbols, "BLUETOOTH", JS_NewString(ctx, LV_SYMBOL_BLUETOOTH));
@@ -574,6 +686,9 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, style, "BORDER_BOTTOM", JS_NewInt32(ctx, DYNAMIC_APP_STYLE_BORDER_BOTTOM));
     (void)JS_SetPropertyStr(ctx, style, "FLEX",          JS_NewInt32(ctx, DYNAMIC_APP_STYLE_FLEX));
     (void)JS_SetPropertyStr(ctx, style, "FONT",          JS_NewInt32(ctx, DYNAMIC_APP_STYLE_FONT));
+    (void)JS_SetPropertyStr(ctx, style, "SHADOW",        JS_NewInt32(ctx, DYNAMIC_APP_STYLE_SHADOW));
+    (void)JS_SetPropertyStr(ctx, style, "GAP",           JS_NewInt32(ctx, DYNAMIC_APP_STYLE_GAP));
+    (void)JS_SetPropertyStr(ctx, style, "SCROLLABLE",    JS_NewInt32(ctx, DYNAMIC_APP_STYLE_SCROLLABLE));
 
     /* sys.align.* —— 必须与 styles.c 的 k_align_map[] 索引一致 */
     (void)JS_SetPropertyStr(ctx, align, "TOP_LEFT",     JS_NewInt32(ctx, 0));
@@ -595,6 +710,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(sys, "log", func_idx_sys_log);
     (void)JS_SetPropertyStr(ctx, sys, "ui",      ui);
     (void)JS_SetPropertyStr(ctx, sys, "time",    time);
+    (void)JS_SetPropertyStr(ctx, sys, "app",     app);
     (void)JS_SetPropertyStr(ctx, sys, "symbols", symbols);
     (void)JS_SetPropertyStr(ctx, sys, "style",   style);
     (void)JS_SetPropertyStr(ctx, sys, "align",   align);

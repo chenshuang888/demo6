@@ -93,15 +93,16 @@ esp_err_t dynamic_app_runtime_setup(void)
     if (base_count == 0) return ESP_FAIL;
 
     /*
-     * 我们追加的 native 数量 = 13 个：
+     * 我们追加的 native 数量 = 16 个：
      *   sys.log
      *   sys.ui.{setText, createLabel, createPanel, createButton,
      *           setStyle, attachRootListener, destroy}
      *   sys.__setDispatcher
      *   sys.time.{uptimeMs, uptimeStr}
      *   setInterval, clearInterval
+     *   sys.app.{saveState, loadState, eraseState}
      */
-    const int extra = 13;
+    const int extra = 16;
     size_t total = base_count + (size_t)extra;
 
     s_rt.cfunc_table = heap_caps_malloc(total * sizeof(JSCFunctionDef),

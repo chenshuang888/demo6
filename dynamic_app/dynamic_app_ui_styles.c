@@ -145,6 +145,26 @@ void apply_style(lv_obj_t *obj, const dynamic_app_ui_command_t *cmd)
             break;
         }
 
+        case DYNAMIC_APP_STYLE_SHADOW:
+            /* a = 0xRRGGBB（阴影色）, b = 宽度(px), c = y 偏移(px) */
+            lv_obj_set_style_shadow_color (obj, lv_color_hex((uint32_t)a), 0);
+            lv_obj_set_style_shadow_width (obj, (lv_coord_t)b, 0);
+            lv_obj_set_style_shadow_ofs_y (obj, (lv_coord_t)c, 0);
+            lv_obj_set_style_shadow_opa   (obj, LV_OPA_50, 0);
+            break;
+
+        case DYNAMIC_APP_STYLE_GAP:
+            /* a = 行间距(px), b = 列间距(px)。flex 容器内子项的间距。 */
+            lv_obj_set_style_pad_row    (obj, (lv_coord_t)a, 0);
+            lv_obj_set_style_pad_column (obj, (lv_coord_t)b, 0);
+            break;
+
+        case DYNAMIC_APP_STYLE_SCROLLABLE:
+            /* a = 0(关) / 1(开)。默认 panel 已关；list 需要滚动时业务自己开。 */
+            if (a) lv_obj_add_flag   (obj, LV_OBJ_FLAG_SCROLLABLE);
+            else   lv_obj_clear_flag (obj, LV_OBJ_FLAG_SCROLLABLE);
+            break;
+
         default:
             ESP_LOGW(TAG, "unknown style key %d", (int)cmd->u.style.key);
             break;

@@ -32,7 +32,7 @@ extern "C" {
 
 #define DYNAMIC_APP_UI_ID_MAX_LEN     32
 #define DYNAMIC_APP_UI_TEXT_MAX_LEN   128
-#define DYNAMIC_APP_UI_REGISTRY_MAX   64
+#define DYNAMIC_APP_UI_REGISTRY_MAX   256
 #define DYNAMIC_APP_UI_EVENT_QUEUE_LEN 8
 
 typedef enum {
@@ -59,6 +59,9 @@ typedef enum {
     DYNAMIC_APP_STYLE_BORDER_BOTTOM,   /* a = 0xRRGGBB */
     DYNAMIC_APP_STYLE_FLEX,            /* a = 0(column) / 1(row) */
     DYNAMIC_APP_STYLE_FONT,            /* a = 0(text) / 1(title) / 2(huge) */
+    DYNAMIC_APP_STYLE_SHADOW,          /* a = 0xRRGGBB, b = width(px), c = ofs_y(px) */
+    DYNAMIC_APP_STYLE_GAP,             /* a = row_pad(px), b = col_pad(px) */
+    DYNAMIC_APP_STYLE_SCROLLABLE,      /* a = 0(关) / 1(开)，默认关 */
 } dynamic_app_style_key_t;
 
 typedef struct {
@@ -77,10 +80,11 @@ typedef struct {
 /* 反向事件（UI → Script）的类型。
  * 与 JS 侧 dispatcher 的 type 参数一一对应，数值不能改。 */
 typedef enum {
-    DYNAMIC_APP_UI_EV_CLICK   = 1,
-    DYNAMIC_APP_UI_EV_PRESS   = 2,
-    DYNAMIC_APP_UI_EV_DRAG    = 3,
-    DYNAMIC_APP_UI_EV_RELEASE = 4,
+    DYNAMIC_APP_UI_EV_CLICK      = 1,
+    DYNAMIC_APP_UI_EV_PRESS      = 2,
+    DYNAMIC_APP_UI_EV_DRAG       = 3,
+    DYNAMIC_APP_UI_EV_RELEASE    = 4,
+    DYNAMIC_APP_UI_EV_LONG_PRESS = 5,
 } dynamic_app_ui_event_type_t;
 
 typedef struct {

@@ -132,7 +132,9 @@ int registry_alloc(const char *id, ui_obj_type_t type, lv_obj_t *obj)
  * §3. parent 解析
  *
  *   传入字符串 → 返回 lv_obj_t*。
- *   失败时回落到 s_root，带 WARN 日志。永远不返回 NULL（除非 root 也无效）。
+ *   - parent_id 为 NULL/空 → 返回 root（顶层挂载）
+ *   - parent_id 非空但找不到 → 返回 NULL（让 create 失败，避免孤儿）
+ *   - parent_id 找到但 obj 失效 → 返回 NULL（同上）
  * ========================================================================= */
 
 lv_obj_t *resolve_parent(const char *parent_id)
@@ -145,14 +147,14 @@ lv_obj_t *resolve_parent(const char *parent_id)
 
     int slot = registry_find(parent_id);
     if (slot < 0) {
-        ESP_LOGW(TAG, "parent id '%s' not found, fallback to root", parent_id);
-        return root;
+        ESP_LOGW(TAG, "parent id '%s' not found, drop create", parent_id);
+        return NULL;
     }
 
     lv_obj_t *p = s_registry[slot].obj;
     if (!p || !lv_obj_is_valid(p)) {
-        ESP_LOGW(TAG, "parent id '%s' obj invalid, fallback to root", parent_id);
-        return root;
+        ESP_LOGW(TAG, "parent id '%s' obj invalid, drop create", parent_id);
+        return NULL;
     }
     return p;
 }
