@@ -1,4 +1,5 @@
 #include "page_menu.h"
+#include "page_dynamic_app.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include "app_fonts.h"
@@ -35,8 +36,9 @@ typedef struct {
     lv_obj_t *notify_item;
     lv_obj_t *music_item;
     lv_obj_t *system_item;
-    /* “动态脚本 App（MicroQuickJS MVP）”入口菜单项 */
-    lv_obj_t *dynamic_app_item;
+    /* 动态 App 入口（多个，每个对应一个 dynamic app） */
+    lv_obj_t *alarm_item;
+    lv_obj_t *calc_item;
     lv_obj_t *about_item;
 
     lv_obj_t *bt_status_lbl;   /* 蓝牙状态文字: "已连接"/"未连接" */
@@ -219,9 +221,14 @@ static void create_menu_list(void)
         LV_SYMBOL_BARS, "System",
         NULL, NULL, 0, false);
 
-    /* 动态 App 演示入口：进入后由脚本通过队列异步更新 UI（见 page_dynamic_app/dynamic_app 组件）。 */
-    s_ui.dynamic_app_item = create_list_item(card,
-        LV_SYMBOL_PLAY, "Dynamic App",
+    /* 动态 App 入口：宿主页 PAGE_DYNAMIC_APP 共用，
+     * 区别只在 set_pending(name) 选哪个脚本。 */
+    s_ui.alarm_item = create_list_item(card,
+        LV_SYMBOL_BELL, "Alarm",
+        NULL, NULL, 0, false);
+
+    s_ui.calc_item = create_list_item(card,
+        LV_SYMBOL_PLUS, "Calculator",
         NULL, NULL, 0, false);
 
     s_ui.about_item = create_list_item(card,
@@ -311,9 +318,17 @@ static void on_system_clicked(lv_event_t *e)
     page_router_switch(PAGE_SYSTEM);
 }
 
-static void on_dynamic_app_clicked(lv_event_t *e)
+static void on_alarm_clicked(lv_event_t *e)
 {
-    /* 切换到动态 App 页面（MicroQuickJS MVP 演示页）。 */
+    (void)e;
+    page_dynamic_app_set_pending("alarm");
+    page_router_switch(PAGE_DYNAMIC_APP);
+}
+
+static void on_calc_clicked(lv_event_t *e)
+{
+    (void)e;
+    page_dynamic_app_set_pending("calc");
     page_router_switch(PAGE_DYNAMIC_APP);
 }
 
@@ -326,8 +341,8 @@ static void bind_events(void)
     lv_obj_add_event_cb(s_ui.notify_item,  on_notify_clicked,    LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.music_item,   on_music_clicked,     LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.system_item,  on_system_clicked,    LV_EVENT_CLICKED, NULL);
-    /* 进入 Dynamic App 页面 */
-    lv_obj_add_event_cb(s_ui.dynamic_app_item, on_dynamic_app_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.alarm_item,   on_alarm_clicked,     LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.calc_item,    on_calc_clicked,      LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.about_item,   on_about_clicked,     LV_EVENT_CLICKED, NULL);
 }
 
@@ -374,7 +389,7 @@ static void page_menu_destroy(void)
 
     s_ui.back_btn = NULL;
     s_ui.bt_item = s_ui.bl_item = s_ui.time_item = s_ui.weather_item = s_ui.notify_item = s_ui.music_item =
-        s_ui.system_item = s_ui.dynamic_app_item = s_ui.about_item = NULL;
+    s_ui.system_item = s_ui.alarm_item = s_ui.calc_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

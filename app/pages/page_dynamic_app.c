@@ -1,5 +1,7 @@
 #include "page_dynamic_app.h"
 
+#include <string.h>
+
 #include "app_fonts.h"
 #include "dynamic_app.h"
 #include "dynamic_app_ui.h"
@@ -9,16 +11,13 @@
 static const char *TAG = "page_dynamic_app";
 
 /*
- * 这个页面的定位：一个“最小可用”的 Dynamic App 演示页。
+ * 这个页面的定位：动态 app 的"宿主"。
  *
- * 页面本身只做三件事：
- * 1) 创建一个 label（s_ui.time_lbl）用于展示文本
- * 2) 把它注册到 dynamic_app_ui 的 registry（id="time"）
- * 3) 启动脚本（dynamic_app_start），让 app.js 通过 sys.ui.setText() 来更新这个 label
+ * 不固定跑某一个 app —— 切换 app 的方式是：
+ *   page_dynamic_app_set_pending("xxx");
+ *   page_router_switch(PAGE_DYNAMIC_APP);
  *
- * 你需要重点记住的线程规则：
- * - 本文件里创建/注册 LVGL 对象的代码都在 UI 线程执行（安全）
- * - 真正的跨线程桥接发生在 dynamic_app_ui_enqueue_set_text() / dynamic_app_ui_drain()
+ * 内部把 "xxx" 透传给 dynamic_app_start，由 registry 找到对应脚本运行。
  */
 
 #define COLOR_BG     0x1E1B2E
@@ -36,6 +35,16 @@ typedef struct {
 } page_dyn_ui_t;
 
 static page_dyn_ui_t s_ui = {0};
+
+/* 下一次 page create 时要启动的 app 名。默认 "alarm"（向后兼容）。 */
+static char s_pending_app[16] = "alarm";
+
+void page_dynamic_app_set_pending(const char *app_name)
+{
+    if (!app_name || !app_name[0]) return;
+    strncpy(s_pending_app, app_name, sizeof(s_pending_app) - 1);
+    s_pending_app[sizeof(s_pending_app) - 1] = '\0';
+}
 
 static void init_styles(void)
 {
@@ -122,8 +131,10 @@ static void page_init(void)
     /* 只允许在 PAGE_DYNAMIC_APP 创建 UI：root 只在本页面生命周期内有效 */
     dynamic_app_ui_set_root(s_ui.list_root);
 
-    /* 启动脚本：脚本线程开始跑 app.js，并通过队列异步驱动 UI。 */
-    dynamic_app_start();
+    /* 启动脚本：脚本线程开始跑指定 app，并通过队列异步驱动 UI。
+     * 由 page_dynamic_app_set_pending 选择要跑的 app（默认 alarm）。 */
+    ESP_LOGI(TAG, "starting app: %s", s_pending_app);
+    dynamic_app_start(s_pending_app);
 }
 
 static lv_obj_t *page_dynamic_app_create(void)

@@ -24,6 +24,7 @@
  * ========================================================================= */
 
 #include "dynamic_app_internal.h"
+#include "dynamic_app_registry.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,12 +38,9 @@ static const char *TAG = "dynamic_app_rt";
 /* ============================================================================
  * §1. 嵌入资源符号
  *
- *   ESP-IDF 的 EMBED_TXTFILES 把 scripts/app.js 编进固件，
- *   生成 _binary_app_js_start / _binary_app_js_end 符号。
+ *   各 app 的脚本由 registry 统一管理，runtime 不再直接持有符号。
+ *   见 dynamic_app_registry.c 的 g_apps[] 表。
  * ========================================================================= */
-
-extern const uint8_t app_js_start[] asm("_binary_app_js_start");
-extern const uint8_t app_js_end[]   asm("_binary_app_js_end");
 
 /* ============================================================================
  * §2. JS 写日志 / 中断钩子
@@ -187,15 +185,26 @@ esp_err_t dynamic_app_runtime_bind_globals(JSContext *ctx)
 
 esp_err_t dynamic_app_runtime_eval_app(JSContext *ctx)
 {
-    const char *script = (const char *)app_js_start;
-    size_t script_len = (size_t)(app_js_end - app_js_start);
-
-    if (!script || script_len == 0) {
-        ESP_LOGE(TAG, "embedded app.js missing");
+    const char *name = dynamic_app_registry_current();
+    if (!name || name[0] == '\0') {
+        ESP_LOGE(TAG, "no current app set");
         return ESP_FAIL;
     }
 
-    JSValue val = JS_Eval(ctx, script, script_len, "app.js", 0);
+    const uint8_t *buf = NULL;
+    size_t buf_len = 0;
+    if (!dynamic_app_registry_get(name, &buf, &buf_len) ||
+        !buf || buf_len == 0)
+    {
+        ESP_LOGE(TAG, "app '%s' not found in registry", name);
+        return ESP_FAIL;
+    }
+
+    /* JS 异常文件名用 app 名，便于定位 */
+    char filename[24];
+    snprintf(filename, sizeof(filename), "%s.js", name);
+
+    JSValue val = JS_Eval(ctx, (const char *)buf, buf_len, filename, 0);
     if (JS_IsException(val)) {
         dynamic_app_dump_exception(ctx);
         return ESP_FAIL;

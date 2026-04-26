@@ -29,7 +29,8 @@
       "Bash(grep -nB1 -A4 \"JS_Call\\\\b\" managed_components/makgordon__esp-mquickjs/mquickjs.h)",
       "Bash(node -c dynamic_app/scripts/app.js)",
       "Bash(node --check dynamic_app/scripts/app.js)",
-      "WebFetch(domain:docs.espressif.com)"
+      "WebFetch(domain:docs.espressif.com)",
+      "Bash(node *)"
     ]
   }
 }

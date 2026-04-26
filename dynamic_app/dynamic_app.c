@@ -32,6 +32,7 @@
 
 #include "dynamic_app.h"
 #include "dynamic_app_internal.h"
+#include "dynamic_app_registry.h"
 #include "dynamic_app_ui.h"
 
 #include <stdio.h>
@@ -105,7 +106,8 @@ static void script_task(void *arg)
         if (!(notify_val & NOTIFY_START)) continue;
         if (s_rt.app_running) continue;
 
-        ESP_LOGI(TAG, "starting dynamic app");
+        ESP_LOGI(TAG, "starting dynamic app: %s",
+                 dynamic_app_registry_current());
 
         /* 每次启动都彻底清零 interval 表（避免上次 stop 残留） */
         memset(s_rt.intervals, 0, sizeof(s_rt.intervals));
@@ -125,7 +127,7 @@ static void script_task(void *arg)
             continue;
         }
         if (dynamic_app_runtime_eval_app(s_rt.ctx) != ESP_OK) {
-            ESP_LOGE(TAG, "eval app.js failed");
+            ESP_LOGE(TAG, "eval app failed: %s", dynamic_app_registry_current());
             dynamic_app_runtime_teardown();
             s_rt.app_running = false;
             continue;
@@ -184,9 +186,14 @@ esp_err_t dynamic_app_init(void)
     return ESP_OK;
 }
 
-void dynamic_app_start(void)
+void dynamic_app_start(const char *app_name)
 {
     if (!s_rt.task) return;
+    /* 通过 registry 的 current 字段把 app 名带到 script_task。
+     * NotifyValue 是 32 位 bit mask，没法直接传字符串；
+     * 在 notify 之前写入是安全的：start 是 idempotent 的 ack，
+     * script_task 一旦看到 NOTIFY_START 就会读 current 并 eval。 */
+    dynamic_app_registry_set_current(app_name ? app_name : "");
     xTaskNotify(s_rt.task, NOTIFY_START, eSetBits);
 }
 

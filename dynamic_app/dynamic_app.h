@@ -32,12 +32,16 @@ extern "C" {
 esp_err_t dynamic_app_init(void);
 
 /**
- * 启动当前动态 App（通常在页面 create/init 末尾触发）。
+ * 启动指定 app（通常在页面 create/init 末尾触发）。
+ *
+ * @param app_name 注册表中的 app 名（"alarm" / "calc" / ...）
  *
  * 说明：
- * - `dynamic_app_start()` 是异步触发：内部通过 FreeRTOS 通知脚本任务开始工作，不会阻塞 UI。
+ * - 异步触发：内部通过 FreeRTOS 通知脚本任务开始工作，不会阻塞 UI。
+ * - 名称会被拷贝到内部，调用方不必保留字符串生命周期。
+ * - 找不到对应脚本时，脚本任务在尝试 eval 时报错并自动回到 idle 状态。
  */
-void dynamic_app_start(void);
+void dynamic_app_start(const char *app_name);
 
 /**
  * 停止当前动态 App（通常在页面 destroy 时触发）。

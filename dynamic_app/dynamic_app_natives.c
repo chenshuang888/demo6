@@ -22,6 +22,7 @@
  * ========================================================================= */
 
 #include "dynamic_app_internal.h"
+#include "dynamic_app_registry.h"
 #include "dynamic_app_ui.h"
 #include "persist.h"
 
@@ -366,14 +367,20 @@ static JSValue js_clear_interval(JSContext *ctx, JSValue *this_val, int argc, JS
  *     - JS 侧自己 JSON.stringify/parse；C 侧只是个 string ↔ NVS blob 的搬运工
  *     - 同步调用：返回值生效就是真落盘/真读出。线程上下文是 Script Task，
  *       NVS API 自带锁，无需队列
- *     - namespace 固定 "dynapp"，key 固定 "state"。将来支持多 app 时
- *       由调用方传 key（或这层在 setup 时记下 script name）
+ *     - namespace 固定 "dynapp"，key = 当前 app 名（"alarm" / "calc" / ...）
+ *       不同 app 自动隔离；同一 app 多页面共享一个 blob
  *     - 4KB 上限：NVS blob 上限 ~4000B，闹钟 state JSON ~几百字节足够
  * ========================================================================= */
 
 #define DYNAPP_NS         "dynapp"
-#define DYNAPP_STATE_KEY  "state"
 #define DYNAPP_STATE_MAX  4000   /* 留出 NVS 元信息空间 */
+
+/* 取当前 app 的 NVS key。空字符串 → 拒绝读写（避免误存到错误位置） */
+static const char *current_app_key(void)
+{
+    const char *n = dynamic_app_registry_current();
+    return (n && n[0]) ? n : NULL;
+}
 
 /* sys.app.saveState(jsonString) -> bool
  *   传入 JSON 字符串，写入 NVS。成功返回 true。
@@ -391,15 +398,20 @@ static JSValue js_sys_app_save_state(JSContext *ctx, JSValue *this_val,
     const char *s = JS_ToCStringLen(ctx, &len, argv[0], &buf);
     if (!s) return JS_EXCEPTION;
 
+    const char *key = current_app_key();
+    if (!key) {
+        ESP_LOGW(TAG, "saveState: no current app, dropped");
+        return JS_NewBool(0);
+    }
     if (len > DYNAPP_STATE_MAX) {
         ESP_LOGW(TAG, "saveState: payload %u B exceeds %u, dropped",
                  (unsigned)len, (unsigned)DYNAPP_STATE_MAX);
         return JS_NewBool(0);
     }
 
-    esp_err_t err = persist_set_blob(DYNAPP_NS, DYNAPP_STATE_KEY, s, len);
+    esp_err_t err = persist_set_blob(DYNAPP_NS, key, s, len);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "saveState NVS err=0x%x", err);
+        ESP_LOGW(TAG, "saveState NVS err=0x%x (key=%s)", err, key);
         return JS_NewBool(0);
     }
     return JS_NewBool(1);
@@ -413,14 +425,17 @@ static JSValue js_sys_app_load_state(JSContext *ctx, JSValue *this_val,
 {
     (void)this_val; (void)argc; (void)argv;
 
+    const char *key = current_app_key();
+    if (!key) return JS_NULL;
+
     /* 第一次调 nvs_get_blob 用 NULL 探测长度 */
     size_t len = 0;
-    esp_err_t err = persist_get_blob(DYNAPP_NS, DYNAPP_STATE_KEY, NULL, &len);
+    esp_err_t err = persist_get_blob(DYNAPP_NS, key, NULL, &len);
     if (err == ESP_ERR_NVS_NOT_FOUND || len == 0) {
         return JS_NULL;
     }
     if (err != ESP_OK && err != ESP_ERR_NVS_INVALID_LENGTH) {
-        ESP_LOGW(TAG, "loadState probe err=0x%x", err);
+        ESP_LOGW(TAG, "loadState probe err=0x%x (key=%s)", err, key);
         return JS_NULL;
     }
     if (len > DYNAPP_STATE_MAX) {
@@ -433,10 +448,10 @@ static JSValue js_sys_app_load_state(JSContext *ctx, JSValue *this_val,
         ESP_LOGW(TAG, "loadState malloc %u failed", (unsigned)len);
         return JS_NULL;
     }
-    err = persist_get_blob(DYNAPP_NS, DYNAPP_STATE_KEY, tmp, &len);
+    err = persist_get_blob(DYNAPP_NS, key, tmp, &len);
     if (err != ESP_OK) {
         free(tmp);
-        ESP_LOGW(TAG, "loadState read err=0x%x", err);
+        ESP_LOGW(TAG, "loadState read err=0x%x (key=%s)", err, key);
         return JS_NULL;
     }
     tmp[len] = '\0';
@@ -447,13 +462,16 @@ static JSValue js_sys_app_load_state(JSContext *ctx, JSValue *this_val,
 }
 
 /* sys.app.eraseState() -> bool
- *   抹掉持久化数据，方便业务重置 / 测试。
+ *   抹掉当前 app 的持久化 blob（不影响其它 app）。
  */
 static JSValue js_sys_app_erase_state(JSContext *ctx, JSValue *this_val,
                                       int argc, JSValue *argv)
 {
     (void)this_val; (void)argc; (void)argv;
-    esp_err_t err = persist_erase_namespace(DYNAPP_NS);
+    const char *key = current_app_key();
+    if (!key) return JS_NewBool(0);
+    /* 用 set_blob 写 0 长度等价"清空"——更精确、不影响别人 */
+    esp_err_t err = persist_set_blob(DYNAPP_NS, key, "", 0);
     return JS_NewBool(err == ESP_OK ? 1 : 0);
 }
 
