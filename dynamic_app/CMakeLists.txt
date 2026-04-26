@@ -16,6 +16,8 @@ idf_component_register(
         # 把脚本打包进固件，每个 app 一个独立 buffer
         "scripts/alarm.js"
         "scripts/calc.js"
+        "scripts/timer.js"
+        "scripts/game2048.js"
     REQUIRES
         freertos
         esp_timer

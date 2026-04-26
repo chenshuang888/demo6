@@ -39,6 +39,8 @@ typedef struct {
     /* 动态 App 入口（多个，每个对应一个 dynamic app） */
     lv_obj_t *alarm_item;
     lv_obj_t *calc_item;
+    lv_obj_t *timer_item;
+    lv_obj_t *g2048_item;
     lv_obj_t *about_item;
 
     lv_obj_t *bt_status_lbl;   /* 蓝牙状态文字: "已连接"/"未连接" */
@@ -231,6 +233,14 @@ static void create_menu_list(void)
         LV_SYMBOL_PLUS, "Calculator",
         NULL, NULL, 0, false);
 
+    s_ui.timer_item = create_list_item(card,
+        LV_SYMBOL_LOOP, "Timer",
+        NULL, NULL, 0, false);
+
+    s_ui.g2048_item = create_list_item(card,
+        LV_SYMBOL_OK, "2048",
+        NULL, NULL, 0, false);
+
     s_ui.about_item = create_list_item(card,
         LV_SYMBOL_LIST, "About",
         NULL, NULL, 0, true);
@@ -332,6 +342,20 @@ static void on_calc_clicked(lv_event_t *e)
     page_router_switch(PAGE_DYNAMIC_APP);
 }
 
+static void on_timer_clicked(lv_event_t *e)
+{
+    (void)e;
+    page_dynamic_app_set_pending("timer");
+    page_router_switch(PAGE_DYNAMIC_APP);
+}
+
+static void on_g2048_clicked(lv_event_t *e)
+{
+    (void)e;
+    page_dynamic_app_set_pending("2048");
+    page_router_switch(PAGE_DYNAMIC_APP);
+}
+
 static void bind_events(void)
 {
     lv_obj_add_event_cb(s_ui.back_btn,     on_back_clicked,      LV_EVENT_CLICKED, NULL);
@@ -343,6 +367,8 @@ static void bind_events(void)
     lv_obj_add_event_cb(s_ui.system_item,  on_system_clicked,    LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.alarm_item,   on_alarm_clicked,     LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.calc_item,    on_calc_clicked,      LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.timer_item,   on_timer_clicked,     LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.g2048_item,   on_g2048_clicked,     LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.about_item,   on_about_clicked,     LV_EVENT_CLICKED, NULL);
 }
 
@@ -389,7 +415,7 @@ static void page_menu_destroy(void)
 
     s_ui.back_btn = NULL;
     s_ui.bt_item = s_ui.bl_item = s_ui.time_item = s_ui.weather_item = s_ui.notify_item = s_ui.music_item =
-    s_ui.system_item = s_ui.alarm_item = s_ui.calc_item = s_ui.about_item = NULL;
+    s_ui.system_item = s_ui.alarm_item = s_ui.calc_item = s_ui.timer_item = s_ui.g2048_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

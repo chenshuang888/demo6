@@ -1,11 +1,13 @@
-// Dynamic App —— 计算器（240×320）
+// Dynamic App —— 计算器（240×320）v2
 //
-// 架构沿用闹钟那套：
-//   §1. VDOM 框架（与 alarm.js 完全一致；将来可拆共享）
-//   §2. 计算器业务（state + view + rerender）
+// 相比 v1 的改动：
+//   1) 双行 display：上面小灰字 expr（"12 × 3"），下面大字 display
+//   2) 按下反馈：onPress 拉亮 / onRelease 复位（用 native style 即时反馈）
+//   3) 布局参数化：DISP_H / BTN_H / GAP / N_COLS 一次定义，每行 Y 累加
+//   4) 配色调整：数字键浅一档、运算符更醒目，等号绿色
+//   5) 0 占两格用 BTN_W*2+GAP 横向占位
 //
-// 没有持久化：计算器属于"用完即丢"语义，重启从 0 开始更符合直觉。
-//
+// 不变：架构沿用 alarm.js 那套 VDOM；不持久化。
 // 约束：esp-mquickjs 仅支持 ES5。
 
 // ============================================================================
@@ -277,34 +279,51 @@ var h = VDOM.h;
 //   display       当前屏幕显示的字符串
 //   prev          上一个操作数（数字 string）；null 表示无
 //   op            上一次按下的运算符 '+' '-' '×' '÷'；null 表示无
-//   justEval      刚按过 '='：下一个数字键应清屏重输；下一个运算符以当前
-//                 display 为左操作数继续
+//   expr          顶部历史行（"12 × " / "12 × 3 ="），UI 提示用
+//   justEval      刚按过 '='：下一个数字键应清屏重输
 //   newEntry      下一个数字键应清屏重输（按运算符后置 true）
 
-var COLOR_BG       = 0x1A1530;
-var COLOR_DISPLAY  = 0x0F0B20;
-var COLOR_TEXT     = 0xF1ECFF;
-var COLOR_NUM      = 0x3B3458;   // 数字键背景
-var COLOR_FN       = 0x55507A;   // C/±/% 功能键
-var COLOR_OP       = 0xF59E0B;   // 运算符键（橙色）
-var COLOR_OP_PRESS = 0xFCD34D;   // 运算符按下/被选中态
-var COLOR_EQ       = 0x10B981;   // 等号键（绿色）
+// ---- 配色 ----
+var COL_BG       = 0x14101F;   // 整体底色
+var COL_DISP_BG  = 0x0A0816;   // 显示区底
+var COL_DISP_FG  = 0xFFFFFF;   // 大字
+var COL_EXPR_FG  = 0x8B8AA8;   // 历史小字
+var COL_NUM      = 0x4A4368;   // 数字键 (浅一档紫)
+var COL_NUM_HI   = 0x6C638F;   // 数字键按下
+var COL_FN       = 0x3A3454;   // C/±/% 功能键 (深一档)
+var COL_FN_HI    = 0x534B73;
+var COL_OP       = 0xF59E0B;   // 运算符 (橙)
+var COL_OP_HI    = 0xFCD34D;   // 运算符按下/选中态
+var COL_EQ       = 0x10B981;   // 等号 (绿)
+var COL_EQ_HI    = 0x34D399;
+var COL_TEXT     = 0xF1ECFF;
+var COL_TEXT_DK  = 0xFFFFFF;
+
+// ---- 布局常量（一次定义，UI 跟着变） ----
+var SCR_W        = 240;
+var SCR_H        = 320;
+// 总高校核：DISP_H + GAP + 5*(BTN_H+GAP) = 70+5 + 5*49 = 320 ✓
+var DISP_H       = 70;          // 双行 display 高度
+var BTN_H        = 44;
+var GAP          = 5;
+var N_COLS       = 4;
+var SIDE_PAD     = 8;
+var BTN_W        = ((SCR_W - SIDE_PAD * 2 - GAP * (N_COLS - 1)) / N_COLS) | 0;  // 52
 
 var state = {
     display:  "0",
     prev:     null,
     op:       null,
+    expr:     "",
     justEval: false,
     newEntry: false
 };
 
 function fmt(n) {
-    // 截掉无意义尾零；保留最多 9 位
     if (!isFinite(n)) return "Err";
     var s = "" + n;
     if (s.length > 12) {
         s = n.toPrecision(9);
-        // toPrecision 可能产生科学计数 1.234e+10，去掉无意义尾 0
         if (s.indexOf('e') < 0 && s.indexOf('.') >= 0) {
             s = s.replace(/0+$/, '').replace(/\.$/, '');
         }
@@ -324,6 +343,7 @@ function compute(a, b, op) {
 function pressDigit(d) {
     if (state.justEval) {
         state.display = d;
+        state.expr = "";
         state.justEval = false;
         state.newEntry = false;
         return;
@@ -339,6 +359,7 @@ function pressDigit(d) {
 function pressDot() {
     if (state.justEval) {
         state.display = "0.";
+        state.expr = "";
         state.justEval = false;
         state.newEntry = false;
         return;
@@ -352,13 +373,13 @@ function pressDot() {
 }
 
 function pressOp(op) {
-    // 已有 prev + op 且未 newEntry → 先把当前式算掉再链式
     if (state.prev !== null && state.op !== null && !state.newEntry) {
         var r = compute(state.prev, state.display, state.op);
         state.display = fmt(r);
     }
     state.prev = state.display;
     state.op = op;
+    state.expr = state.display + " " + op;
     state.newEntry = true;
     state.justEval = false;
 }
@@ -366,6 +387,7 @@ function pressOp(op) {
 function pressEq() {
     if (state.op === null || state.prev === null) return;
     var r = compute(state.prev, state.display, state.op);
+    state.expr = state.prev + " " + state.op + " " + state.display + " =";
     state.display = fmt(r);
     state.prev = null;
     state.op = null;
@@ -377,6 +399,7 @@ function pressClear() {
     state.display = "0";
     state.prev = null;
     state.op = null;
+    state.expr = "";
     state.justEval = false;
     state.newEntry = false;
 }
@@ -407,86 +430,101 @@ function onKey(e) {
     rerender();
 }
 
+// 按下 / 抬起：直接旁路 native 调样式，不走 rerender，反馈立刻
+//
+// 注意：rerender() 之后这些瞬时 bg 会被 view() 里的 base 色覆盖回去
+// （diff 检测到 bg 变化），所以 onClick 触发 rerender 同时也"复位"了高亮。
+// 唯一需要手动复位的是"按下后没触发 click"（手指划走）的场景，
+// 此时 onRelease 会被调用，所以兜底放在 onRelease。
+
+function onPressBtn(e) {
+    var id = e.currentTarget;
+    var k = id.substring(2);
+    var hi;
+    if (k === '=') hi = COL_EQ_HI;
+    else if (k === '+' || k === '-' || k === '×' || k === '÷') hi = COL_OP_HI;
+    else if (k === 'C' || k === '±' || k === '%') hi = COL_FN_HI;
+    else hi = COL_NUM_HI;
+    sys.ui.setStyle(id, sys.style.BG_COLOR, hi, 0, 0, 0);
+}
+
+function onReleaseBtn(e) {
+    var id = e.currentTarget;
+    var k = id.substring(2);
+    var base = baseColorOf(k);
+    sys.ui.setStyle(id, sys.style.BG_COLOR, base, 0, 0, 0);
+}
+
+function baseColorOf(k) {
+    if (k === '=') return COL_EQ;
+    if (k === '+' || k === '-' || k === '×' || k === '÷') {
+        return (state.op === k && state.newEntry) ? COL_OP_HI : COL_OP;
+    }
+    if (k === 'C' || k === '±' || k === '%') return COL_FN;
+    return COL_NUM;
+}
+
 // ---- view ----
 
-function btn(label, color, w, h_, isOp) {
+function btn(label, w) {
+    if (w === undefined) w = BTN_W;
+    var color = baseColorOf(label);
     return h('button', {
         id: "k_" + label,
-        size: [w, h_],
-        bg: (isOp && state.op === label && state.newEntry) ? COLOR_OP_PRESS : color,
-        radius: 12,
-        onClick: onKey
+        size: [w, BTN_H],
+        bg: color,
+        radius: 14,
+        onClick: onKey,
+        onPress: onPressBtn,
+        onRelease: onReleaseBtn
     }, [
-        h('label', { id: "kl_" + label, text: label, fg: COLOR_TEXT,
+        h('label', { id: "kl_" + label, text: label, fg: COL_TEXT,
                      font: 'title', align: ['c', 0, 0] })
     ]);
 }
 
-// 240 宽，按钮 4 列：4*52 + 5*4 间距 = 208 + 20 = 228，左右各留 6
-// 高度：display 80 + 5行*52 + 6*4 间距 = 80 + 260 + 24 = 364 > 320
-// 缩到 4 行（合并最后一行）+ 按钮 48：4*48+5*4=212；display 60 + 5*48 + 6*4=324
-// 改方案：display 60，按钮 46，间距 4，5 行 = 60 + 5*46 + 6*4 = 60 + 230 + 24 = 314 ✓
-
-var BTN = 46;
-var GAP = 4;
-
-function viewRow(items, y) {
+// 一行四个等宽按钮的容器
+function row(yIdx, items) {
+    var y = DISP_H + GAP + yIdx * (BTN_H + GAP);
     return h('panel', {
-        id: "row_" + y, size: [-100, BTN], align: ['tm', 0, y],
-        bg: COLOR_BG, flex: 'row', gap: [0, GAP],
-        pad: [(240 - 4 * BTN - 3 * GAP) / 2, 0, 0, 0]
+        id: "row_" + yIdx,
+        size: [-100, BTN_H],
+        align: ['tm', 0, y],
+        bg: COL_BG,
+        flex: 'row',
+        gap: [0, GAP],
+        pad: [SIDE_PAD, 0, 0, 0]
     }, items);
 }
 
 function view() {
-    var rowY0 = 60 + GAP;             // 64
-    var rowY1 = rowY0 + BTN + GAP;    // 114
-    var rowY2 = rowY1 + BTN + GAP;    // 164
-    var rowY3 = rowY2 + BTN + GAP;    // 214
-    var rowY4 = rowY3 + BTN + GAP;    // 264
-
-    return h('panel', { id: "appRoot", size: [-100, -100], bg: COLOR_BG,
+    return h('panel', { id: "appRoot", size: [-100, -100], bg: COL_BG,
                          scrollable: false }, [
-        // 显示区
-        h('panel', { id: "disp", size: [-100, 60], align: ['tm', 0, 0],
-                     bg: COLOR_DISPLAY }, [
-            h('label', { id: "dispText", text: state.display,
-                         fg: COLOR_TEXT, font: 'huge',
-                         align: ['rm', -12, 0] })
-        ]),
-        viewRow([
-            btn('C',  COLOR_FN, BTN, BTN, false),
-            btn('±',  COLOR_FN, BTN, BTN, false),
-            btn('%',  COLOR_FN, BTN, BTN, false),
-            btn('÷',  COLOR_OP, BTN, BTN, true)
-        ], rowY0),
-        viewRow([
-            btn('7',  COLOR_NUM, BTN, BTN, false),
-            btn('8',  COLOR_NUM, BTN, BTN, false),
-            btn('9',  COLOR_NUM, BTN, BTN, false),
-            btn('×',  COLOR_OP,  BTN, BTN, true)
-        ], rowY1),
-        viewRow([
-            btn('4',  COLOR_NUM, BTN, BTN, false),
-            btn('5',  COLOR_NUM, BTN, BTN, false),
-            btn('6',  COLOR_NUM, BTN, BTN, false),
-            btn('-',  COLOR_OP,  BTN, BTN, true)
-        ], rowY2),
-        viewRow([
-            btn('1',  COLOR_NUM, BTN, BTN, false),
-            btn('2',  COLOR_NUM, BTN, BTN, false),
-            btn('3',  COLOR_NUM, BTN, BTN, false),
-            btn('+',  COLOR_OP,  BTN, BTN, true)
-        ], rowY3),
-        // 末行：0 占两列宽（含间距） + . + =
-        h('panel', { id: "row_last", size: [-100, BTN], align: ['tm', 0, rowY4],
-                     bg: COLOR_BG, flex: 'row', gap: [0, GAP],
-                     pad: [(240 - 4 * BTN - 3 * GAP) / 2, 0, 0, 0] }, [
-            btn('0',  COLOR_NUM, BTN * 2 + GAP, BTN, false),
-            btn('.',  COLOR_NUM, BTN, BTN, false),
-            btn('=',  COLOR_EQ,  BTN, BTN, false)
-        ])
-    ]);
+            // ---- 显示区：一个 panel 装两行 label ----
+            h('panel', { id: "disp", size: [-100, DISP_H], align: ['tm', 0, 0],
+                         bg: COL_DISP_BG, scrollable: false }, [
+                h('label', { id: "exprText", text: state.expr || " ",
+                             fg: COL_EXPR_FG, font: 'text',
+                             align: ['tr', -14, 8] }),
+                h('label', { id: "dispText", text: state.display,
+                             fg: COL_DISP_FG, font: 'huge',
+                             align: ['br', -14, -8] })
+            ]),
+            // ---- 5 行按钮 ----
+            row(0, [ btn('C'), btn('±'), btn('%'), btn('÷') ]),
+            row(1, [ btn('7'), btn('8'), btn('9'), btn('×') ]),
+            row(2, [ btn('4'), btn('5'), btn('6'), btn('-') ]),
+            row(3, [ btn('1'), btn('2'), btn('3'), btn('+') ]),
+            // ---- 末行：0 占两格 ----
+            h('panel', { id: "row_4", size: [-100, BTN_H],
+                         align: ['tm', 0, DISP_H + GAP + 4 * (BTN_H + GAP)],
+                         bg: COL_BG, flex: 'row', gap: [0, GAP],
+                         pad: [SIDE_PAD, 0, 0, 0] }, [
+                btn('0', BTN_W * 2 + GAP),
+                btn('.'),
+                btn('=')
+            ])
+        ]);
 }
 
 function rerender() { VDOM.render(view(), null); }

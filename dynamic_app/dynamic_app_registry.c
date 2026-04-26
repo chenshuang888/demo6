@@ -11,10 +11,14 @@
 #include <string.h>
 
 /* 嵌入资源符号（来自 EMBED_TXTFILES） */
-extern const uint8_t alarm_js_start[] asm("_binary_alarm_js_start");
-extern const uint8_t alarm_js_end[]   asm("_binary_alarm_js_end");
-extern const uint8_t calc_js_start[]  asm("_binary_calc_js_start");
-extern const uint8_t calc_js_end[]    asm("_binary_calc_js_end");
+extern const uint8_t alarm_js_start[]    asm("_binary_alarm_js_start");
+extern const uint8_t alarm_js_end[]      asm("_binary_alarm_js_end");
+extern const uint8_t calc_js_start[]     asm("_binary_calc_js_start");
+extern const uint8_t calc_js_end[]       asm("_binary_calc_js_end");
+extern const uint8_t timer_js_start[]    asm("_binary_timer_js_start");
+extern const uint8_t timer_js_end[]      asm("_binary_timer_js_end");
+extern const uint8_t game2048_js_start[] asm("_binary_game2048_js_start");
+extern const uint8_t game2048_js_end[]   asm("_binary_game2048_js_end");
 
 typedef struct {
     const char    *name;
@@ -23,8 +27,10 @@ typedef struct {
 } app_entry_t;
 
 static const app_entry_t g_apps[] = {
-    { "alarm", alarm_js_start, alarm_js_end },
-    { "calc",  calc_js_start,  calc_js_end  },
+    { "alarm", alarm_js_start,    alarm_js_end    },
+    { "calc",  calc_js_start,     calc_js_end     },
+    { "timer", timer_js_start,    timer_js_end    },
+    { "2048",  game2048_js_start, game2048_js_end },
 };
 #define G_APPS_COUNT (int)(sizeof(g_apps) / sizeof(g_apps[0]))
 
