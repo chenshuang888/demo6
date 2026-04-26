@@ -57,6 +57,11 @@ static struct {
     int16_t   acc_dx, acc_dy;
 } s_gesture = { .active_target = NULL };
 
+/* 一次性 build-ready 回调：drain 在处理完 ATTACH_ROOT_LISTENER 后触发并自动清空。
+ * 用于宿主页判断"脚本已经把对象树搭完，可以提交给 router 切屏"。 */
+static dynamic_app_ui_ready_cb_t s_ready_cb       = NULL;
+static void                     *s_ready_cb_ud   = NULL;
+
 /* ============================================================================
  * §2. 生命周期
  * ========================================================================= */
@@ -90,6 +95,9 @@ void dynamic_app_ui_unregister_all(void)
     s_gesture.active_id[0] = '\0';
     s_gesture.acc_dx = s_gesture.acc_dy = 0;
     dynamic_app_ui_clear_event_queue();
+    /* prepare 中途取消时，没机会触发 ready_cb，这里强清避免下次误触发 */
+    s_ready_cb    = NULL;
+    s_ready_cb_ud = NULL;
 }
 
 /* ============================================================================
@@ -99,6 +107,12 @@ void dynamic_app_ui_unregister_all(void)
 void dynamic_app_ui_set_root(lv_obj_t *root)
 {
     s_root = root;
+}
+
+void dynamic_app_ui_set_ready_cb(dynamic_app_ui_ready_cb_t cb, void *user_data)
+{
+    s_ready_cb    = cb;
+    s_ready_cb_ud = user_data;
 }
 
 void dynamic_app_ui_set_fonts(const lv_font_t *text,
@@ -475,6 +489,17 @@ void dynamic_app_ui_drain(int max_count)
                 lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_RELEASED,     NULL);
                 lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_CLICKED,      NULL);
                 lv_obj_add_event_cb(obj, on_lv_root_event, LV_EVENT_LONG_PRESSED, NULL);
+
+                /* "build ready" 信号：脚本通常在 mount + 首次 rerender 完成后
+                 * 才调 attachRootListener，因此这里也是宿主页可以放心切屏的时机。
+                 * 一次性触发：取出 cb 后立即清空，避免重复触发。 */
+                if (s_ready_cb) {
+                    dynamic_app_ui_ready_cb_t cb = s_ready_cb;
+                    void *ud = s_ready_cb_ud;
+                    s_ready_cb    = NULL;
+                    s_ready_cb_ud = NULL;
+                    cb(ud);
+                }
                 break;
             }
 

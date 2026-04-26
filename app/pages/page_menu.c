@@ -271,15 +271,22 @@ static void update_backlight_label(void)
 
 /* ============================================================================
  * 事件回调
+ *
+ * 凡是离开 menu 的入口，都先调一次 page_dynamic_app_cancel_prepare_if_any()。
+ * 因为用户可能刚点了某个动态 app（后台 prepare 中），又改主意点了别的入口 ——
+ * 必须先把进行中的 prepare 撤掉，否则脚本会继续往不存在的 root 灌命令。
+ * 该函数对非 PREPARING 状态是 no-op，可以放心无脑调。
  * ========================================================================= */
 
 static void on_back_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_TIME);
 }
 
 static void on_backlight_clicked(lv_event_t *e)
 {
+    /* backlight 不切页，不需要 cancel */
     uint8_t cur = lcd_panel_get_backlight();
     /* 找当前档位, 切换到下一档 */
     int idx = 0;
@@ -300,60 +307,64 @@ static void on_backlight_clicked(lv_event_t *e)
 
 static void on_about_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_ABOUT);
 }
 
 static void on_time_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_TIME_ADJUST);
 }
 
 static void on_weather_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_WEATHER);
 }
 
 static void on_notify_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_NOTIFICATIONS);
 }
 
 static void on_music_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_MUSIC);
 }
 
 static void on_system_clicked(lv_event_t *e)
 {
+    page_dynamic_app_cancel_prepare_if_any();
     page_router_switch(PAGE_SYSTEM);
 }
+
+/* ---- 4 个动态 app 入口走"后台 prepare + 自动 commit"路径 ---- */
 
 static void on_alarm_clicked(lv_event_t *e)
 {
     (void)e;
-    page_dynamic_app_set_pending("alarm");
-    page_router_switch(PAGE_DYNAMIC_APP);
+    page_dynamic_app_prepare_and_switch("alarm");
 }
 
 static void on_calc_clicked(lv_event_t *e)
 {
     (void)e;
-    page_dynamic_app_set_pending("calc");
-    page_router_switch(PAGE_DYNAMIC_APP);
+    page_dynamic_app_prepare_and_switch("calc");
 }
 
 static void on_timer_clicked(lv_event_t *e)
 {
     (void)e;
-    page_dynamic_app_set_pending("timer");
-    page_router_switch(PAGE_DYNAMIC_APP);
+    page_dynamic_app_prepare_and_switch("timer");
 }
 
 static void on_g2048_clicked(lv_event_t *e)
 {
     (void)e;
-    page_dynamic_app_set_pending("2048");
-    page_router_switch(PAGE_DYNAMIC_APP);
+    page_dynamic_app_prepare_and_switch("2048");
 }
 
 static void bind_events(void)

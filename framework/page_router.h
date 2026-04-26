@@ -82,6 +82,26 @@ esp_err_t page_router_register(page_id_t id, const page_callbacks_t *callbacks);
 esp_err_t page_router_switch(page_id_t id);
 
 /**
+ * 用一个 *已经在外面 prepare 好的* screen 接管为当前页，跳过该页的 create()。
+ *
+ * 用法场景：希望"目标页对象树在后台先建好，再瞬间切屏"以消除组装过程的中间帧。
+ * 标准流程：
+ *   1) 调用方自己 lv_obj_create(NULL) + 填充子树（不 lv_scr_load）
+ *   2) 把这棵 screen 传进来
+ *   3) 本函数销毁旧页 + lv_scr_load(prepared_screen) + 更新内部状态
+ *
+ * 与 page_router_switch 的差异：
+ *   - 不调 callbacks->create
+ *   - 其它（destroy 旧页、状态更新）完全一致
+ *
+ * 失败时（id 非法 / prepared_screen 为 NULL / 当前已在该页）返回错误码，
+ * 调用方需要自己释放 prepared_screen。
+ *
+ * @note 只在 UI 线程调用。
+ */
+esp_err_t page_router_commit_prepared(page_id_t id, lv_obj_t *prepared_screen);
+
+/**
  * 获取当前页面 ID。
  */
 page_id_t page_router_get_current(void);

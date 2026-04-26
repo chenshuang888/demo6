@@ -131,6 +131,17 @@ bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
  * 通常脚本会对最外层 root container 调一次。 */
 bool dynamic_app_ui_enqueue_attach_root_listener(const char *id, size_t id_len);
 
+/* 注册"build ready"回调：drain 处理完一条 ATTACH_ROOT_LISTENER 命令后会触发一次
+ * 该回调，然后自动清空（一次性，不会重复触发）。
+ *
+ * 用途：宿主页 (page_dynamic_app) 用它感知"脚本已经把对象树搭完了"，
+ * 然后把后台 prepared screen 提交给 page_router，实现"瞬切"效果。
+ *
+ * 在 UI 任务上下文调用 cb，cb 内部调 LVGL/page_router 是安全的。
+ * 传入 NULL 等同于取消注册（用于宿主页 cancel prepare 流程）。 */
+typedef void (*dynamic_app_ui_ready_cb_t)(void *user_data);
+void dynamic_app_ui_set_ready_cb(dynamic_app_ui_ready_cb_t cb, void *user_data);
+
 /* 销毁单个对象：lv_obj_del(obj) + 释放 registry slot。
  * 调用方（JS VDOM.destroy）负责自底向上递归，C 侧只处理一个 id。
  * 防御：若 JS 没递归就直接 destroy 父对象，LVGL 会级联删子对象，
