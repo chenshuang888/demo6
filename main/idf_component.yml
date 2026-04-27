@@ -5,3 +5,5 @@ dependencies:
     version: "^1.0.0"
   makgordon/esp-mquickjs:
     version: "^0.2.1"
+  joltwallet/littlefs:
+    version: "^1.14.0"

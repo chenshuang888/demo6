@@ -220,6 +220,9 @@ esp_err_t dynamic_app_runtime_eval_app(JSContext *ctx)
     snprintf(filename, sizeof(filename), "%s.js", name);
 
     JSValue val = JS_Eval(ctx, (const char *)buf, buf_len, filename, 0);
+    /* eval 完即可释放（JS 已经 parse 进自己的字节码）；
+     * 内嵌 buf 是 rodata，release 是 no-op；FS buf 是 heap，必须 free。 */
+    dynamic_app_registry_release(buf);
     if (JS_IsException(val)) {
         dynamic_app_dump_exception(ctx);
         return ESP_FAIL;
