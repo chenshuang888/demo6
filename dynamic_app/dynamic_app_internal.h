@@ -71,6 +71,10 @@ typedef struct {
     bool dispatcher_allocated;
     JSGCRef dispatcher;
 
+    /* sys.ble.onRecv 注册的 JS 回调。同样靠 GCRef 钉住，teardown 时释放。 */
+    bool ble_recv_cb_allocated;
+    JSGCRef ble_recv_cb;
+
     /* 每个自定义 native fn 在 cfunc_table 里的索引。
      * 由 runtime 在 setup_stdlib_and_context 阶段填好，
      * 由 natives.c 在 bind_sys_and_timers 阶段读取使用。 */
@@ -90,6 +94,9 @@ typedef struct {
     int func_idx_sys_app_save_state;
     int func_idx_sys_app_load_state;
     int func_idx_sys_app_erase_state;
+    int func_idx_sys_ble_send;
+    int func_idx_sys_ble_on_recv;
+    int func_idx_sys_ble_is_connected;
 } dynamic_app_runtime_t;
 
 /* 全局唯一实例。定义在 dynamic_app.c。 */
@@ -113,6 +120,16 @@ esp_err_t dynamic_app_runtime_eval_app(JSContext *ctx);      /* eval 嵌入的 a
 
 /* JS native 函数表的两个集合方法。dynamic_app_natives.c 实现。 */
 
+/* 我们追加的 native 数量。runtime.c 用它申请 cfunc_table 槽位。
+ *
+ * ⚠️ 加新 native 时只改一处：自增这个常量 + 在 dynamic_app_natives_register
+ * 里给新 func_idx 分配 base_count + N（N 从 0 起），并 DEF_CFN 一行。
+ *
+ * 历史教训：之前散落两处常量（这里 + register 里硬编码 idx 上限），
+ * 加 BLE 时漏改这里 → cfunc_table 越界 → 踩坏 PSRAM 堆元数据 →
+ * 下一次 heap_caps_malloc 触发 TLSF assert "prev_free can not be null"。 */
+#define DYNAMIC_APP_EXTRA_NATIVE_COUNT 19
+
 /* 在 cfunc_table 里登记所有自定义 native 的 JSCFunctionDef。
  * runtime.c 在分配 cfunc_table 之后调一次。 */
 void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count);
@@ -135,9 +152,16 @@ int64_t dynamic_app_next_interval_deadline_ms(int64_t cur_ms);
 /* 消化"UI → Script"反向事件队列里所有点击事件 */
 void dynamic_app_drain_ui_events_once(JSContext *ctx);
 
+/* 消化"BLE → Script" inbox 队列里所有 PC 推来的消息，逐个调 sys.ble.onRecv 注册的
+ * JS 回调。每 tick 最多消 4 条，避免长 JS 处理阻塞主循环。 */
+void dynamic_app_drain_ble_inbox_once(JSContext *ctx);
+
 /* 释放所有 setInterval 槽位的 GCRef。
  * runtime.c 的 teardown 调用，避免泄漏。 */
 void dynamic_app_intervals_reset(JSContext *ctx);
+
+/* 释放 sys.ble.onRecv GCRef + 清空 inbox。teardown 调用。 */
+void dynamic_app_ble_reset(JSContext *ctx);
 
 #ifdef __cplusplus
 }

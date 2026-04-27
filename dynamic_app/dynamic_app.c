@@ -44,6 +44,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "dynapp_bridge_service.h"
+
 static const char *TAG = "dynamic_app";
 
 /* ============================================================================
@@ -111,6 +113,8 @@ static void script_task(void *arg)
 
         /* 每次启动都彻底清零 interval 表（避免上次 stop 残留） */
         memset(s_rt.intervals, 0, sizeof(s_rt.intervals));
+        /* 上一个 app 没消费完的 PC 消息也清掉，避免串台 */
+        dynapp_bridge_clear_inbox();
         s_rt.app_running = true;
 
         /* ——— 三步走：setup → bind → eval ——— */
@@ -144,6 +148,9 @@ static void script_task(void *arg)
 
             /* UI → Script 反向事件：先跑 onClick 回调 */
             dynamic_app_drain_ui_events_once(s_rt.ctx);
+
+            /* BLE → Script 反向事件：把 PC 推来的消息送给 sys.ble.onRecv */
+            dynamic_app_drain_ble_inbox_once(s_rt.ctx);
 
             /* 定时器 */
             if (!dynamic_app_run_intervals_once(s_rt.ctx, cur)) {

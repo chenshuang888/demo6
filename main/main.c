@@ -9,6 +9,7 @@
 #include "notify_service.h"
 #include "media_service.h"
 #include "system_service.h"
+#include "dynapp_bridge_service.h"
 #include "time_manager.h"
 #include "weather_manager.h"
 #include "notify_manager.h"
@@ -76,6 +77,7 @@ void app_main(void)
     ESP_ERROR_CHECK(notify_service_init());
     ESP_ERROR_CHECK(media_service_init());
     ESP_ERROR_CHECK(system_service_init());
+    ESP_ERROR_CHECK(dynapp_bridge_service_init());
     ESP_ERROR_CHECK(ble_driver_nimble_start());
 
     // 再初始化应用

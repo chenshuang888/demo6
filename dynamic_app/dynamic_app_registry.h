@@ -19,6 +19,14 @@ bool dynamic_app_registry_get(const char *name,
                               size_t *out_len);
 
 /**
+ * 取标准库 prelude 脚本（含 VDOM / makeBle / setDispatcher）。
+ * runtime 在每次 eval 业务脚本之前先 eval 一次 prelude，
+ * 业务脚本因此能直接使用 VDOM / h / makeBle 等全局符号。
+ */
+void dynamic_app_registry_get_prelude(const uint8_t **out_buf,
+                                      size_t *out_len);
+
+/**
  * 当前正在跑的 app 名（runtime 在 eval 前调用 set，
  * sys.app.saveState/loadState 用它当 NVS key）。
  */

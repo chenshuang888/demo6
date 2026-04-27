@@ -41,6 +41,9 @@ typedef struct {
     lv_obj_t *calc_item;
     lv_obj_t *timer_item;
     lv_obj_t *g2048_item;
+    lv_obj_t *echo_item;
+    lv_obj_t *dyn_weather_item;
+    lv_obj_t *dyn_music_item;
     lv_obj_t *about_item;
 
     lv_obj_t *bt_status_lbl;   /* 蓝牙状态文字: "已连接"/"未连接" */
@@ -241,6 +244,18 @@ static void create_menu_list(void)
         LV_SYMBOL_OK, "2048",
         NULL, NULL, 0, false);
 
+    s_ui.echo_item = create_list_item(card,
+        LV_SYMBOL_BLUETOOTH, "BLE Echo",
+        NULL, NULL, 0, false);
+
+    s_ui.dyn_weather_item = create_list_item(card,
+        LV_SYMBOL_IMAGE, "Weather (dyn)",
+        NULL, NULL, 0, false);
+
+    s_ui.dyn_music_item = create_list_item(card,
+        LV_SYMBOL_AUDIO, "Music (dyn)",
+        NULL, NULL, 0, false);
+
     s_ui.about_item = create_list_item(card,
         LV_SYMBOL_LIST, "About",
         NULL, NULL, 0, true);
@@ -367,6 +382,24 @@ static void on_g2048_clicked(lv_event_t *e)
     page_dynamic_app_prepare_and_switch("2048");
 }
 
+static void on_echo_clicked(lv_event_t *e)
+{
+    (void)e;
+    page_dynamic_app_prepare_and_switch("echo");
+}
+
+static void on_dyn_weather_clicked(lv_event_t *e)
+{
+    (void)e;
+    page_dynamic_app_prepare_and_switch("weather");
+}
+
+static void on_dyn_music_clicked(lv_event_t *e)
+{
+    (void)e;
+    page_dynamic_app_prepare_and_switch("music");
+}
+
 static void bind_events(void)
 {
     lv_obj_add_event_cb(s_ui.back_btn,     on_back_clicked,      LV_EVENT_CLICKED, NULL);
@@ -380,6 +413,9 @@ static void bind_events(void)
     lv_obj_add_event_cb(s_ui.calc_item,    on_calc_clicked,      LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.timer_item,   on_timer_clicked,     LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.g2048_item,   on_g2048_clicked,     LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.echo_item,    on_echo_clicked,      LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.dyn_weather_item, on_dyn_weather_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.dyn_music_item,   on_dyn_music_clicked,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.about_item,   on_about_clicked,     LV_EVENT_CLICKED, NULL);
 }
 
@@ -426,7 +462,8 @@ static void page_menu_destroy(void)
 
     s_ui.back_btn = NULL;
     s_ui.bt_item = s_ui.bl_item = s_ui.time_item = s_ui.weather_item = s_ui.notify_item = s_ui.music_item =
-    s_ui.system_item = s_ui.alarm_item = s_ui.calc_item = s_ui.timer_item = s_ui.g2048_item = s_ui.about_item = NULL;
+    s_ui.system_item = s_ui.alarm_item = s_ui.calc_item = s_ui.timer_item = s_ui.g2048_item =
+    s_ui.echo_item = s_ui.dyn_weather_item = s_ui.dyn_music_item = s_ui.about_item = NULL;
     s_ui.bt_status_lbl = NULL;
     s_ui.bl_value_lbl = NULL;
 }

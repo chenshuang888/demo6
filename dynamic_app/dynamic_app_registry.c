@@ -11,6 +11,8 @@
 #include <string.h>
 
 /* 嵌入资源符号（来自 EMBED_TXTFILES） */
+extern const uint8_t prelude_js_start[]  asm("_binary_prelude_js_start");
+extern const uint8_t prelude_js_end[]    asm("_binary_prelude_js_end");
 extern const uint8_t alarm_js_start[]    asm("_binary_alarm_js_start");
 extern const uint8_t alarm_js_end[]      asm("_binary_alarm_js_end");
 extern const uint8_t calc_js_start[]     asm("_binary_calc_js_start");
@@ -19,6 +21,12 @@ extern const uint8_t timer_js_start[]    asm("_binary_timer_js_start");
 extern const uint8_t timer_js_end[]      asm("_binary_timer_js_end");
 extern const uint8_t game2048_js_start[] asm("_binary_game2048_js_start");
 extern const uint8_t game2048_js_end[]   asm("_binary_game2048_js_end");
+extern const uint8_t echo_js_start[]     asm("_binary_echo_js_start");
+extern const uint8_t echo_js_end[]       asm("_binary_echo_js_end");
+extern const uint8_t weather_js_start[]  asm("_binary_weather_js_start");
+extern const uint8_t weather_js_end[]    asm("_binary_weather_js_end");
+extern const uint8_t music_js_start[]    asm("_binary_music_js_start");
+extern const uint8_t music_js_end[]      asm("_binary_music_js_end");
 
 typedef struct {
     const char    *name;
@@ -27,10 +35,13 @@ typedef struct {
 } app_entry_t;
 
 static const app_entry_t g_apps[] = {
-    { "alarm", alarm_js_start,    alarm_js_end    },
-    { "calc",  calc_js_start,     calc_js_end     },
-    { "timer", timer_js_start,    timer_js_end    },
-    { "2048",  game2048_js_start, game2048_js_end },
+    { "alarm",   alarm_js_start,    alarm_js_end    },
+    { "calc",    calc_js_start,     calc_js_end     },
+    { "timer",   timer_js_start,    timer_js_end    },
+    { "2048",    game2048_js_start, game2048_js_end },
+    { "echo",    echo_js_start,     echo_js_end     },
+    { "weather", weather_js_start,  weather_js_end  },
+    { "music",   music_js_start,    music_js_end    },
 };
 #define G_APPS_COUNT (int)(sizeof(g_apps) / sizeof(g_apps[0]))
 
@@ -47,6 +58,12 @@ bool dynamic_app_registry_get(const char *name,
         }
     }
     return false;
+}
+
+void dynamic_app_registry_get_prelude(const uint8_t **out_buf, size_t *out_len)
+{
+    if (out_buf) *out_buf = prelude_js_start;
+    if (out_len) *out_len = (size_t)(prelude_js_end - prelude_js_start);
 }
 
 /* 当前 app 名：start 时由控制层写入，sys.app 系列 native 读取做 NVS key。

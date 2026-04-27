@@ -24,6 +24,7 @@
 #include "dynamic_app_internal.h"
 #include "dynamic_app_registry.h"
 #include "dynamic_app_ui.h"
+#include "dynapp_bridge_service.h"
 #include "persist.h"
 
 #include <stdio.h>
@@ -476,6 +477,81 @@ static JSValue js_sys_app_erase_state(JSContext *ctx, JSValue *this_val,
 }
 
 /* ============================================================================
+ * §5c. JS Native：sys.ble.* （BLE 透传）
+ *
+ *   设计：
+ *     - 完全透明：JS 传字符串 → C 当字节流通过 dynapp_bridge_service 发出去
+ *     - 接收：JS 注册一个 onRecv(payloadStr) 回调，每 tick C 侧 drain inbox 后逐条调
+ *     - 不暴露 GATT/UUID 概念，对 JS 来说就是 send/recv 一对管道
+ *     - 单一 onRecv：覆盖式注册（再调一次会替换，传 null 可清空）
+ *   线程：所有 JS 调到这里都在 script_task；安全调 dynapp_bridge_send（NimBLE 自带锁）
+ * ========================================================================= */
+
+/* sys.ble.send(payloadStr) -> bool
+ *   把字符串当 utf8 字节发给 PC。返回 true=NimBLE 成功 enqueue notify。
+ */
+static JSValue js_sys_ble_send(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.ble.send(payloadString): need string");
+    }
+    JSCStringBuf buf;
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, argv[0], &buf);
+    if (!s) return JS_EXCEPTION;
+    if (len > DYNAPP_BRIDGE_MAX_PAYLOAD) {
+        ESP_LOGW(TAG, "ble.send: payload %u B exceeds %d, dropped",
+                 (unsigned)len, DYNAPP_BRIDGE_MAX_PAYLOAD);
+        return JS_NewBool(0);
+    }
+    bool ok = dynapp_bridge_send((const uint8_t *)s, len);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+/* sys.ble.onRecv(fn|null) -> undefined
+ *   注册 PC 推数据回调。fn 签名：function(payloadStr) {...}
+ *   传 null/undefined 取消注册。再次注册会替换上一次。
+ */
+static JSValue js_sys_ble_on_recv(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1) return JS_UNDEFINED;
+
+    /* 先释放旧 ref（如果有） */
+    if (s_rt.ble_recv_cb_allocated) {
+        JS_DeleteGCRef(ctx, &s_rt.ble_recv_cb);
+        s_rt.ble_recv_cb_allocated = false;
+    }
+
+    if (JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        return JS_UNDEFINED;   /* 取消注册 */
+    }
+    if (!JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.ble.onRecv(fn|null): not a function");
+    }
+
+    JSValue *p = JS_AddGCRef(ctx, &s_rt.ble_recv_cb);
+    if (!p) {
+        ESP_LOGE(TAG, "ble.onRecv: AddGCRef failed");
+        return JS_ThrowInternalError(ctx, "out of GC slots");
+    }
+    *p = argv[0];
+    s_rt.ble_recv_cb_allocated = true;
+    return JS_UNDEFINED;
+}
+
+/* sys.ble.isConnected() -> bool */
+static JSValue js_sys_ble_is_connected(JSContext *ctx, JSValue *this_val,
+                                       int argc, JSValue *argv)
+{
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_NewBool(dynapp_bridge_is_connected() ? 1 : 0);
+}
+
+/* ============================================================================
  * §6. tick 循环服务
  *
  *   被 dynamic_app.c 的 script_task 主循环周期性调用。
@@ -570,6 +646,46 @@ void dynamic_app_drain_ui_events_once(JSContext *ctx)
     }
 }
 
+/* 消化 BLE inbox 队列：每 tick 最多 4 条。
+ *   消息内容当 utf8 字符串传给 onRecv（脚本一般 JSON.parse 处理）。
+ *   若 onRecv 抛 JS 异常：打印 + 继续下一条（不能让一个坏包让 app 退出）。 */
+void dynamic_app_drain_ble_inbox_once(JSContext *ctx)
+{
+    if (!s_rt.ble_recv_cb_allocated) {
+        /* JS 没注册回调时，直接清空 inbox 防积压 */
+        dynapp_bridge_msg_t drop;
+        while (dynapp_bridge_pop_inbox(&drop)) { /* drop */ }
+        return;
+    }
+
+    int budget = 4;
+    dynapp_bridge_msg_t msg;
+    while (budget-- > 0 && dynapp_bridge_pop_inbox(&msg)) {
+        if (JS_StackCheck(ctx, 3)) {
+            dynamic_app_dump_exception(ctx);
+            return;
+        }
+        JSValue arg = JS_NewStringLen(ctx, (const char *)msg.data, msg.len);
+        JS_PushArg(ctx, arg);                       /* arg1 */
+        JS_PushArg(ctx, s_rt.ble_recv_cb.val);      /* fn */
+        JS_PushArg(ctx, JS_NULL);                   /* this */
+        JSValue ret = JS_Call(ctx, 1);
+        if (JS_IsException(ret)) {
+            dynamic_app_dump_exception(ctx);
+            /* 不 return；坏包不应拖死 app */
+        }
+    }
+}
+
+void dynamic_app_ble_reset(JSContext *ctx)
+{
+    if (s_rt.ble_recv_cb_allocated) {
+        JS_DeleteGCRef(ctx, &s_rt.ble_recv_cb);
+        s_rt.ble_recv_cb_allocated = false;
+    }
+    dynapp_bridge_clear_inbox();
+}
+
 /* ============================================================================
  * §7. cfunc 表注册
  *
@@ -611,6 +727,9 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_app_save_state          = (int)base_count + 13;
     rt->func_idx_sys_app_load_state          = (int)base_count + 14;
     rt->func_idx_sys_app_erase_state         = (int)base_count + 15;
+    rt->func_idx_sys_ble_send                = (int)base_count + 16;
+    rt->func_idx_sys_ble_on_recv             = (int)base_count + 17;
+    rt->func_idx_sys_ble_is_connected        = (int)base_count + 18;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -629,6 +748,9 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_app_save_state,          js_sys_app_save_state,          1);
     DEF_CFN(func_idx_sys_app_load_state,          js_sys_app_load_state,          0);
     DEF_CFN(func_idx_sys_app_erase_state,         js_sys_app_erase_state,         0);
+    DEF_CFN(func_idx_sys_ble_send,                js_sys_ble_send,                1);
+    DEF_CFN(func_idx_sys_ble_on_recv,             js_sys_ble_on_recv,             1);
+    DEF_CFN(func_idx_sys_ble_is_connected,        js_sys_ble_is_connected,        0);
 }
 
 #undef DEF_CFN
@@ -658,6 +780,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     JSValue ui      = JS_NewObject(ctx);
     JSValue time    = JS_NewObject(ctx);
     JSValue app     = JS_NewObject(ctx);
+    JSValue ble     = JS_NewObject(ctx);
     JSValue symbols = JS_NewObject(ctx);
     JSValue style   = JS_NewObject(ctx);
     JSValue align   = JS_NewObject(ctx);
@@ -680,6 +803,11 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(app, "saveState",  func_idx_sys_app_save_state);
     BIND_FN(app, "loadState",  func_idx_sys_app_load_state);
     BIND_FN(app, "eraseState", func_idx_sys_app_erase_state);
+
+    /* sys.ble.* —— BLE 透传管道 */
+    BIND_FN(ble, "send",        func_idx_sys_ble_send);
+    BIND_FN(ble, "onRecv",      func_idx_sys_ble_on_recv);
+    BIND_FN(ble, "isConnected", func_idx_sys_ble_is_connected);
 
     /* sys.symbols.* —— LVGL 内置 UTF-8 图标字面量 */
     (void)JS_SetPropertyStr(ctx, symbols, "BLUETOOTH", JS_NewString(ctx, LV_SYMBOL_BLUETOOTH));
@@ -729,6 +857,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, sys, "ui",      ui);
     (void)JS_SetPropertyStr(ctx, sys, "time",    time);
     (void)JS_SetPropertyStr(ctx, sys, "app",     app);
+    (void)JS_SetPropertyStr(ctx, sys, "ble",     ble);
     (void)JS_SetPropertyStr(ctx, sys, "symbols", symbols);
     (void)JS_SetPropertyStr(ctx, sys, "style",   style);
     (void)JS_SetPropertyStr(ctx, sys, "align",   align);

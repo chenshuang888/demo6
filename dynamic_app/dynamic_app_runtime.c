@@ -91,16 +91,12 @@ esp_err_t dynamic_app_runtime_setup(void)
     if (base_count == 0) return ESP_FAIL;
 
     /*
-     * 我们追加的 native 数量 = 16 个：
-     *   sys.log
-     *   sys.ui.{setText, createLabel, createPanel, createButton,
-     *           setStyle, attachRootListener, destroy}
-     *   sys.__setDispatcher
-     *   sys.time.{uptimeMs, uptimeStr}
-     *   setInterval, clearInterval
-     *   sys.app.{saveState, loadState, eraseState}
+     * 我们追加的 native 数量声明在 dynamic_app_internal.h:
+     *   DYNAMIC_APP_EXTRA_NATIVE_COUNT
+     * 加新 native 时改那里和 natives.c::dynamic_app_natives_register 即可，
+     * 这里读宏自动跟上，不会再踩 cfunc_table 越界的坑。
      */
-    const int extra = 16;
+    const int extra = DYNAMIC_APP_EXTRA_NATIVE_COUNT;
     size_t total = base_count + (size_t)extra;
 
     s_rt.cfunc_table = heap_caps_malloc(total * sizeof(JSCFunctionDef),
@@ -145,6 +141,7 @@ void dynamic_app_runtime_teardown(void)
 {
     if (s_rt.ctx) {
         dynamic_app_intervals_reset(s_rt.ctx);
+        dynamic_app_ble_reset(s_rt.ctx);
         if (s_rt.dispatcher_allocated) {
             JS_DeleteGCRef(s_rt.ctx, &s_rt.dispatcher);
             s_rt.dispatcher_allocated = false;
@@ -191,6 +188,24 @@ esp_err_t dynamic_app_runtime_eval_app(JSContext *ctx)
         return ESP_FAIL;
     }
 
+    /* Step 1: 注入标准库 prelude（VDOM / makeBle / setDispatcher）。
+     * 业务脚本因此能直接使用 VDOM / h / makeBle 等全局符号。 */
+    const uint8_t *pre_buf = NULL;
+    size_t pre_len = 0;
+    dynamic_app_registry_get_prelude(&pre_buf, &pre_len);
+    if (pre_buf && pre_len > 0) {
+        JSValue pre = JS_Eval(ctx, (const char *)pre_buf, pre_len,
+                              "prelude.js", 0);
+        if (JS_IsException(pre)) {
+            ESP_LOGE(TAG, "eval prelude failed");
+            dynamic_app_dump_exception(ctx);
+            return ESP_FAIL;
+        }
+    } else {
+        ESP_LOGW(TAG, "prelude empty; business app may miss VDOM/makeBle");
+    }
+
+    /* Step 2: eval 业务脚本。 */
     const uint8_t *buf = NULL;
     size_t buf_len = 0;
     if (!dynamic_app_registry_get(name, &buf, &buf_len) ||
