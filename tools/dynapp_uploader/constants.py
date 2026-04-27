@@ -1,0 +1,61 @@
+"""dynapp_uploader 协议常量。
+
+跟固件 services/dynapp_upload_service.c + services/manager/dynapp_upload_manager.h
+严格对齐。改这里时必须同步改固件。
+"""
+
+# ---- GATT ----
+SVC_UUID    = "a3a40001-0000-4aef-b87e-4fa1e0c7e0f6"
+RX_UUID     = "a3a40002-0000-4aef-b87e-4fa1e0c7e0f6"   # PC → ESP, WRITE
+STATUS_UUID = "a3a40003-0000-4aef-b87e-4fa1e0c7e0f6"   # ESP → PC, READ + NOTIFY
+
+# ---- 帧格式 ----
+HEADER_LEN = 4          # [op][seq][len_lo][len_hi]
+MAX_FRAME  = 200        # 与固件 MAX_PAYLOAD 一致
+MAX_CHUNK  = MAX_FRAME - HEADER_LEN - 4   # 减去 header + chunk 内的 offset(4B)
+NAME_LEN   = 15
+
+MAX_SCRIPT_BYTES = 64 * 1024    # DYNAPP_SCRIPT_STORE_MAX_BYTES
+
+# ---- op codes ----
+OP_START   = 0x01
+OP_CHUNK   = 0x02
+OP_END     = 0x03
+OP_DELETE  = 0x10
+OP_LIST    = 0x11
+
+OP_NAMES = {
+    OP_START:  "START",
+    OP_CHUNK:  "CHUNK",
+    OP_END:    "END",
+    OP_DELETE: "DELETE",
+    OP_LIST:   "LIST",
+}
+
+# ---- result codes（固件 upload_result_t）----
+RESULT_OK            = 0
+RESULT_BAD_FRAME     = 1
+RESULT_NO_SESSION    = 2
+RESULT_TOO_LARGE     = 3
+RESULT_CRC_MISMATCH  = 4
+RESULT_FS_ERROR      = 5
+RESULT_BUSY          = 6
+
+RESULT_NAMES = {
+    RESULT_OK:           "OK",
+    RESULT_BAD_FRAME:    "BAD_FRAME",
+    RESULT_NO_SESSION:   "NO_SESSION",
+    RESULT_TOO_LARGE:    "TOO_LARGE",
+    RESULT_CRC_MISMATCH: "CRC_MISMATCH",
+    RESULT_FS_ERROR:     "FS_ERROR",
+    RESULT_BUSY:         "BUSY",
+}
+
+# ---- 默认设备名片段 ----
+DEFAULT_DEVICE_NAME_HINT = "ESP32"
+
+# ---- 内嵌 app 名单（PC 端硬编码，跟固件 dynamic_app_registry.c 的 g_apps[] 对齐）
+# 用于 Apps 视图区分"这个 app 是固件自带还是用户推送"。 ----
+BUILTIN_APP_NAMES = frozenset({
+    "alarm", "calc", "timer", "2048", "echo", "weather", "music",
+})

@@ -11,7 +11,8 @@ idf_component_register(
         "manager/system_manager.c"
         "system_service.c"
         "dynapp_bridge_service.c"
-        "dynapp_storage.c"
+        "dynapp_upload_service.c"
+        "manager/dynapp_upload_manager.c"
     INCLUDE_DIRS
         "."
         "manager"

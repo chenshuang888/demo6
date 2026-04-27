@@ -14,7 +14,7 @@ extern "C" {
  * 双源实现：
  *   1) 编译期内嵌（dynamic_app/scripts 下的 .js，CMakeLists 的 EMBED_TXTFILES）
  *      —— 核心 app 永远在固件里，FS 损坏也能用，是兜底
- *   2) 运行时 LittleFS（services/dynapp_storage，路径 /littlefs/apps/<name>.js）
+ *   2) 运行时 LittleFS（storage/littlefs/dynapp_script_store，路径 /littlefs/apps/<name>.js）
  *      —— 通过 BLE 推送 / WiFi 下载得到的 app
  *
  * 查找顺序：先内嵌再 FS。同名内嵌优先，保证脚本写错也能恢复。

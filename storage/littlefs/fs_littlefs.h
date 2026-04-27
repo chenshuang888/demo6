@@ -17,7 +17,7 @@ extern "C" {
  *   - 暴露 df / format / unmount 这类基础设施操作
  *
  * 不做：
- *   - 任何业务路径策略（"app 放哪儿"由 services/dynapp_storage 决定）
+ *   - 任何业务路径策略（"app 放哪儿"由 storage/littlefs/dynapp_script_store 决定）
  *   - 任何文件名约定
  *
  * 调用方式：

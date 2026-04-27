@@ -10,7 +10,8 @@
 #include "media_service.h"
 #include "system_service.h"
 #include "dynapp_bridge_service.h"
-#include "dynapp_storage.h"
+#include "dynapp_upload_service.h"
+#include "dynapp_script_store.h"
 #include "time_manager.h"
 #include "weather_manager.h"
 #include "notify_manager.h"
@@ -49,7 +50,7 @@ void app_main(void)
 
     // 挂载 LittleFS（动态 App 脚本、未来日志/缓存都从这里走 fopen/fread）
     ESP_ERROR_CHECK(fs_littlefs_init());
-    ESP_ERROR_CHECK(dynapp_storage_init());
+    ESP_ERROR_CHECK(dynapp_script_store_init());
 
     // 恢复上次关机前的时间；失败走硬编码默认
     struct timeval tv;
@@ -84,6 +85,7 @@ void app_main(void)
     ESP_ERROR_CHECK(media_service_init());
     ESP_ERROR_CHECK(system_service_init());
     ESP_ERROR_CHECK(dynapp_bridge_service_init());
+    ESP_ERROR_CHECK(dynapp_upload_service_init());
     ESP_ERROR_CHECK(ble_driver_nimble_start());
 
     // 再初始化应用

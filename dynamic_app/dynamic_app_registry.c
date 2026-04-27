@@ -3,21 +3,21 @@
  *
  * 双源：
  *   1) 内嵌（g_apps[]，编译期 EMBED_TXTFILES）—— 出厂 7 个核心 app
- *   2) FS（services/dynapp_storage，路径 /littlefs/apps/<name>.js）
+ *   2) FS（storage/littlefs/dynapp_script_store，路径 /littlefs/apps/<name>.js）
  *      —— 通过 BLE 推送 / 未来 WiFi 下载得到的脚本
  *
  * 查找顺序：内嵌优先。同名时 FS 版本被忽略，保证脚本写错也能恢复。
  *
  * 内存归属：
  *   - 内嵌返回的 buf 指向 rodata，release 时不能 free
- *   - FS 返回的 buf 是 dynapp_storage 分配的 heap，release 时必须 free
+ *   - FS 返回的 buf 是 dynapp_script_store 分配的 heap，release 时必须 free
  *   实现上用一张小表 s_heap_refs[] 记录"曾被 get() 返回的 heap 指针"，
  *   release 时查表区分。表大小 4 足够：runtime 当前只跑一个 app，
  *   多发出几个仅是为了 prepare/commit 切屏期间瞬时存在两份的兼容。
  * ========================================================================= */
 
 #include "dynamic_app_registry.h"
-#include "dynapp_storage.h"
+#include "dynapp_script_store.h"
 
 #include <string.h>
 
@@ -99,7 +99,7 @@ bool dynamic_app_registry_get(const char *name,
     /* 2) FS 兜底 */
     uint8_t *buf = NULL;
     size_t   len = 0;
-    if (dynapp_storage_read(name, &buf, &len) != ESP_OK) return false;
+    if (dynapp_script_store_read(name, &buf, &len) != ESP_OK) return false;
 
     heap_refs_add(buf);
     *out_buf = buf;
@@ -111,7 +111,7 @@ void dynamic_app_registry_release(const uint8_t *buf)
 {
     if (!buf) return;
     if (heap_refs_take(buf)) {
-        dynapp_storage_release((uint8_t *)buf);
+        dynapp_script_store_release((uint8_t *)buf);
     }
     /* 不在表里 → 内嵌符号，no-op */
 }
@@ -137,8 +137,8 @@ int dynamic_app_registry_list(dynamic_app_entry_t *out, int max)
     }
 
     /* 2) FS：跳过同名（内嵌优先） */
-    char fs_names[8][DYNAPP_STORAGE_MAX_NAME_LEN + 1];
-    int  fs_count = dynapp_storage_list(fs_names,
+    char fs_names[8][DYNAPP_SCRIPT_STORE_MAX_NAME + 1];
+    int  fs_count = dynapp_script_store_list(fs_names,
                        (int)(sizeof(fs_names) / sizeof(fs_names[0])));
     for (int i = 0; i < fs_count && n < max; i++) {
         bool dup = false;
