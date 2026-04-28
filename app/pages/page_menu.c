@@ -9,6 +9,7 @@
 #include "backlight_storage.h"
 #include "dynamic_app_registry.h"
 #include "dynapp_upload_manager.h"
+#include "dynapp_fs_worker.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -246,12 +247,11 @@ static void create_top_bar(void)
     lv_obj_add_event_cb(s_ui.back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
 }
 
-/* 显示名 hook：单源化后所有动态 app 都来自 FS，没有"内嵌友好名"映射，
- * 直接显示脚本文件名。函数空壳保留：未来若加 manifest 元数据
- * (eg. /littlefs/apps/<name>.meta) 是天然 hook。 */
-static const char *display_name_for_app(const char *name)
+/* 显示名 hook：单源化后所有动态 app 都来自 FS。当前直接返回 entry.display
+ * （由 dynamic_app_registry 从 manifest.json 读出，缺失时回退 app_id）。 */
+static const char *display_name_for_app(const char *display)
 {
-    return name;
+    return display;
 }
 
 /* 图标 hook：同上。当前所有动态 app 用通用 list 图标。 */
@@ -291,22 +291,21 @@ static void create_dynamic_items(lv_obj_t *card)
 
     s_ui.dyn_count = 0;
     for (int i = 0; i < n; i++) {
-        /* heap 拷贝 app 名：作为 lv_obj 的 user_data，destroy 时回收 */
-        char *copy = strdup(entries[i].name);
+        /* heap 拷贝 app_id：作为 lv_obj 的 user_data，destroy 时回收。
+         * 显示名走 manifest.name（缺失时 entry.display == entry.id）。 */
+        char *copy = strdup(entries[i].id);
         if (!copy) {
-            ESP_LOGW(TAG, "OOM copying app name %s", entries[i].name);
+            ESP_LOGW(TAG, "OOM copying app id %s", entries[i].id);
             continue;
         }
 
         lv_obj_t *item = create_list_item(card,
-            icon_for_app(entries[i].name),
-            display_name_for_app(entries[i].name),
+            icon_for_app(entries[i].id),
+            display_name_for_app(entries[i].display),
             /*out=*/NULL, /*val=*/NULL, /*clr=*/0,
             /*last=*/false);
 
         lv_obj_add_event_cb(item, on_dyn_clicked, LV_EVENT_CLICKED, copy);
-        /* 同一份 user_data 用于两个事件：长按删除时也需要 app 名。
-         * LVGL v9 长按触发后会抑制 CLICKED，不会冲突。 */
         lv_obj_add_event_cb(item, on_dyn_long_pressed, LV_EVENT_LONG_PRESSED, copy);
         s_ui.dyn_names[s_ui.dyn_count++] = copy;
     }
@@ -433,16 +432,25 @@ static void on_dyn_clicked(lv_event_t *e)
 }
 
 /* 长按动态项 → 弹删除确认。
- * Delete 走 dynapp_upload_submit_delete()，与 PC 主动删除完全同一路径，
- * 共享 manager 的 BUSY 拦截、status 广播、菜单刷新。 */
+ * 本地删除直接走 fs_worker（绕开 BLE 协议层）；done cb 里 set s_dirty
+ * 让 UI 线程下一帧重建列表。fs_worker 内部会调 running_check，运行中拒删。 */
+static void on_local_delete_done(esp_err_t result, void *cb_arg)
+{
+    (void)cb_arg;
+    if (result == ESP_OK || result == ESP_ERR_NOT_FOUND) {
+        s_dirty = true;
+    } else {
+        ESP_LOGW(TAG, "local delete failed: 0x%x", result);
+    }
+}
+
 static void on_delete_confirmed(void *ud)
 {
     const char *name = (const char *)ud;
     if (!name) return;
-    if (!dynapp_upload_submit_delete(name)) {
-        ESP_LOGW(TAG, "submit_delete refused (queue full?): %s", name);
+    if (!dynapp_fs_worker_submit_app_delete(name, on_local_delete_done, NULL)) {
+        ESP_LOGW(TAG, "fs_worker queue full, can't delete: %s", name);
     }
-    /* 刷新走 status_cb → s_dirty → page_menu_update 路径，不在这里手工重建。 */
 }
 
 static void on_dyn_long_pressed(lv_event_t *e)
@@ -472,10 +480,10 @@ static void on_dyn_long_pressed(lv_event_t *e)
  * ========================================================================= */
 
 static void on_upload_status(upload_op_t op, upload_result_t result,
-                             const char *name, uint32_t extra,
+                             uint8_t seq, const char *name, uint32_t extra,
                              const uint8_t *list_buf, size_t list_len)
 {
-    (void)name; (void)extra; (void)list_buf; (void)list_len;
+    (void)seq; (void)name; (void)extra; (void)list_buf; (void)list_len;
     /* 只关心"FS 内容真改变了"的两个 ok 事件 */
     if (result != UPL_RESULT_OK) return;
     if (op == UPL_OP_END || op == UPL_OP_DELETE) {

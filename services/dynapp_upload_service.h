@@ -17,10 +17,11 @@ extern "C" {
  * 帧格式（rx, ≤200B）：
  *   [1B op][1B seq][2B payload_len LE][payload...]
  *
- *   op 0x01 START   payload = name(15B,NUL pad)+total_len(4B LE)+crc32(4B LE) = 23B
+ *   op 0x01 START   payload = path(31B,NUL pad)+total_len(4B LE)+crc32(4B LE) = 39B
+ *                   path = "<app_id>/<filename>" 例 "alarm/main.js"
  *   op 0x02 CHUNK   payload = offset(4B LE) + data(...)
  *   op 0x03 END     payload = (空)
- *   op 0x10 DELETE  payload = name(15B,NUL pad) = 15B
+ *   op 0x10 DELETE  payload = app_id(15B,NUL pad) = 15B  （删整个 app 目录）
  *   op 0x11 LIST    payload = (空)
  *
  * 帧格式（status notify, ≤200B）：

@@ -10,126 +10,108 @@ extern "C" {
 #endif
 
 /*
- * dynapp_script_store —— "动态 App 脚本仓"业务层
+ * dynapp_script_store —— "动态 App 仓库"业务层（按 app_id 文件夹布局）
  *
  * 与 fs_littlefs 的分工：
  *   fs_littlefs        只知道"挂了一个 LittleFS"
- *   dynapp_script_store 知道"app 脚本放 /littlefs/apps/<name>.js"，且管文件名约束、
- *                       大小上限、原子写、列举去重等业务规则
+ *   dynapp_script_store 知道每个 app 占一个文件夹，里面有：
+ *     /littlefs/apps/<id>/main.js          脚本入口
+ *     /littlefs/apps/<id>/manifest.json    元信息（id/name 必填）
+ *     /littlefs/apps/<id>/data/...         JS 侧 sys.fs.* 的沙箱写区
  *
- * 不在这里做的事：
- *   - 校验 JS 语法（runtime 层用 esp_mqjs eval 时自然会失败）
- *   - 决定哪些 app 优先内嵌哪些走 FS（registry 双源覆盖策略）
- *   - 网络下载（未来 WiFi 模块负责拉文件，落盘走本接口）
+ * 名称规则：app_id 与 user 文件 relpath 都仅允许 [a-zA-Z0-9_.-]，
+ *          不允许 '/'、'..'、绝对路径，避免穿越。
  */
 
-/* 单脚本上限。超过的写入直接拒。
- * 当前最大 alarm.js / game2048.js 大约 15KB，留 4× 余量。 */
 #define DYNAPP_SCRIPT_STORE_MAX_BYTES   (64 * 1024)
+#define DYNAPP_SCRIPT_STORE_MAX_NAME    15           /* app_id 长度上限 */
+#define DYNAPP_SCRIPT_STORE_MAX_FNAME   31           /* 仓内单个文件名上限 */
+#define DYNAPP_USER_DATA_MAX_PATH       31           /* sys.fs 相对路径上限 */
 
-/* App 名长度上限（不含 .js 后缀和 NUL）。
- * registry 内嵌表的 s_current_name 缓冲是 16，对齐保守一点用 15。 */
-#define DYNAPP_SCRIPT_STORE_MAX_NAME    15
+/* 入口与元信息文件名约定（不在 manifest 声明，固定下来） */
+#define DYNAPP_FILE_MAIN      "main.js"
+#define DYNAPP_FILE_MANIFEST  "manifest.json"
+#define DYNAPP_DATA_SUBDIR    "data"
 
-/**
- * 在 fs_littlefs_init() 之后调用一次。负责确保 /littlefs/apps/ 目录存在，
- * 并清理上次崩溃可能留下的孤儿 .tmp 文件。
- */
+/* 在 fs_littlefs_init() 之后调用一次。负责确保 /littlefs/apps/ 目录存在，
+ * 并清理上次崩溃留下的孤儿 .tmp。 */
 esp_err_t dynapp_script_store_init(void);
 
-/**
- * 读取一个 app 脚本。成功时 *out_buf 指向 heap，调用方用完后必须
- * dynapp_script_store_release(buf) 释放。
+/* ------------------------------------------------------------------
+ * App 仓内文件级 IO（main.js / manifest.json / 任意 app 自描资源）
  *
- * 返回：
- *   ESP_OK              ：找到并读出
- *   ESP_ERR_NOT_FOUND   ：脚本不存在
- *   ESP_ERR_INVALID_ARG ：name 非法
- *   ESP_ERR_NO_MEM      ：分配失败
- *   其它 esp_err_t      ：底层 fopen/fread 失败
- */
-esp_err_t dynapp_script_store_read(const char *name,
-                                   uint8_t **out_buf,
-                                   size_t *out_len);
+ * 调用方需提供 (app_id, filename)。filename 通常用宏 DYNAPP_FILE_MAIN 等。
+ * ------------------------------------------------------------------ */
 
-/**
- * 释放 read 返回的 buffer。NULL 安全。
- */
+esp_err_t dynapp_app_file_read(const char *app_id, const char *filename,
+                               uint8_t **out_buf, size_t *out_len);
+
+esp_err_t dynapp_app_file_write(const char *app_id, const char *filename,
+                                const uint8_t *buf, size_t len);
+
+bool      dynapp_app_file_exists(const char *app_id, const char *filename);
+
+/* 删除整个 app 目录（含 main.js / manifest.json / data/ 全部清空）。 */
+esp_err_t dynapp_app_delete(const char *app_id);
+
+/* 释放 read 返回的 buffer。NULL 安全。 */
 void dynapp_script_store_release(uint8_t *buf);
 
-/**
- * 写入（覆盖）一个 app 脚本。原子语义：先写 .tmp 再 rename，
- * 中途断电不会留下半截文件。
+/* 列举所有 FS 上的 app_id（按文件夹）。 */
+int  dynapp_script_store_list(char out[][DYNAPP_SCRIPT_STORE_MAX_NAME + 1], int max);
+
+/* ------------------------------------------------------------------
+ * Manifest 极简解析 / 写入
  *
- * 返回：
- *   ESP_OK / ESP_ERR_INVALID_ARG / ESP_ERR_INVALID_SIZE / ESP_FAIL
- */
-esp_err_t dynapp_script_store_write(const char *name,
-                                    const uint8_t *buf,
-                                    size_t len);
+ * MVP 字段只有 id 与 name；缺失或 JSON 损坏时 read 返回 ESP_ERR_INVALID_ARG，
+ * 调用方可回落到 app_id 作为 display name。
+ * ------------------------------------------------------------------ */
 
-/**
- * 删除一个 app 脚本。脚本不存在返回 ESP_ERR_NOT_FOUND（非错误，调用方自行决定）。
- */
-esp_err_t dynapp_script_store_delete(const char *name);
+typedef struct {
+    char id[DYNAPP_SCRIPT_STORE_MAX_NAME + 1];
+    char name[32];     /* 显示名，UTF-8，可中文 */
+} dynapp_manifest_t;
 
-/**
- * 检查脚本是否存在。
- */
-bool dynapp_script_store_exists(const char *name);
+esp_err_t dynapp_manifest_read(const char *app_id, dynapp_manifest_t *out);
 
-/**
- * 列举所有 FS 上的 app 名（不含 .js 后缀）。
+/* ------------------------------------------------------------------
+ * sys.fs.* 用户数据沙箱
  *
- * @param out      调用方提供的字符串数组缓冲，每条 ≤ DYNAPP_SCRIPT_STORE_MAX_NAME+1
- * @param max      out 的容量（条数）
- * @return         实际写入的条数；可能小于实际文件数（被截断）
- */
-int dynapp_script_store_list(char out[][DYNAPP_SCRIPT_STORE_MAX_NAME + 1], int max);
+ * 内部把 relpath 拼成 /littlefs/apps/<app_id>/data/<relpath>，
+ * 强制拒绝 '..'、'/'、'\\'、'\0' 之外的非法字符；data/ 按需 mkdir。
+ * ------------------------------------------------------------------ */
+
+esp_err_t dynapp_user_data_read(const char *app_id, const char *relpath,
+                                uint8_t **out_buf, size_t *out_len);
+
+esp_err_t dynapp_user_data_write(const char *app_id, const char *relpath,
+                                 const uint8_t *buf, size_t len);
+
+esp_err_t dynapp_user_data_remove(const char *app_id, const char *relpath);
+
+bool      dynapp_user_data_exists(const char *app_id, const char *relpath);
+
+int       dynapp_user_data_list(const char *app_id,
+                                char out[][DYNAPP_USER_DATA_MAX_PATH + 1], int max);
 
 /* ------------------------------------------------------------------
  * 流式写入（给 BLE 上传 worker 用）
  *
- * 典型时序：
- *   open_writer(name) → append(...) × N → commit() / abort()
- *
- * 语义：
- *   - 同一时刻只能存在一个活跃 writer（实现层面用单例，open 时若有未关闭的旧
- *     writer 会先自动 abort）
- *   - 数据先写 .tmp，commit 时 rename 成正式文件（断电安全）
- *   - abort 删掉 .tmp，正式文件不动
- *
- * 上限：append 累计字节数超过 DYNAPP_SCRIPT_STORE_MAX_BYTES 时返回 INVALID_SIZE
- *      并自动失效（writer 进入失败状态，后续 append/commit 都返回错误）
+ *   open_writer(app_id, filename) → append × N → commit / abort
+ *   单一活跃 writer；新 open 时若旧的没关会先 abort。
  * ------------------------------------------------------------------ */
 
 typedef struct dynapp_script_writer dynapp_script_writer_t;
 
-/**
- * 开始一次流式写入。
- *
- * 失败原因：name 非法 / fopen 失败 / 已存在另一个 writer 且无法 abort。
- */
-dynapp_script_writer_t *dynapp_script_store_open_writer(const char *name);
+dynapp_script_writer_t *dynapp_script_store_open_writer(const char *app_id,
+                                                         const char *filename);
 
 esp_err_t dynapp_script_writer_append(dynapp_script_writer_t *w,
                                       const uint8_t *data, size_t len);
 
-/**
- * 提交：fclose + rename(.tmp → .js)。成功后 writer 自动失效，调用方不再持有指针。
- * 失败时 writer 也已被释放（.tmp 被删），上层不需要再调 abort。
- */
 esp_err_t dynapp_script_writer_commit(dynapp_script_writer_t *w);
-
-/**
- * 取消：fclose + 删 .tmp。writer 失效。NULL 安全。
- */
-void dynapp_script_writer_abort(dynapp_script_writer_t *w);
-
-/**
- * 当前是否有未完成的 writer（worker 状态机调试用）。
- */
-bool dynapp_script_store_has_active_writer(void);
+void      dynapp_script_writer_abort(dynapp_script_writer_t *w);
+bool      dynapp_script_store_has_active_writer(void);
 
 #ifdef __cplusplus
 }

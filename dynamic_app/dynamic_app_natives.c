@@ -25,6 +25,8 @@
 #include "dynamic_app_registry.h"
 #include "dynamic_app_ui.h"
 #include "dynapp_bridge_service.h"
+#include "dynapp_fs_worker.h"
+#include "dynapp_script_store.h"
 #include "persist.h"
 
 #include <stdio.h>
@@ -552,6 +554,133 @@ static JSValue js_sys_ble_is_connected(JSContext *ctx, JSValue *this_val,
 }
 
 /* ============================================================================
+ * §5d. JS Native：sys.fs.* （app 沙箱文件 IO）
+ *
+ *   设计：
+ *     - 路径强制相对当前 app：JS 写 "save.json"，C 拼成
+ *       /littlefs/apps/<current_app>/data/save.json
+ *     - read/exists/list 同步直接走 FS（小文件 < 100ms 可接受）
+ *     - write/remove 走 dynapp_upload_manager 队列异步落盘
+ *       JS 调入立即返回 true（"入队成功"），失败只在 manager 内部打 log
+ *     - 大小上限沿用 64KB；单 path 长度 ≤ 31
+ *   线程：所有 JS 调用都在 script_task；FS API 自带锁。
+ * ========================================================================= */
+
+/* 拒绝在没有 current_app 时使用 sys.fs（避免误写到错误位置） */
+static const char *current_app_id_or_null(void)
+{
+    const char *id = dynamic_app_registry_current();
+    return (id && id[0]) ? id : NULL;
+}
+
+/* sys.fs.read(path) -> string | null */
+static JSValue js_sys_fs_read(JSContext *ctx, JSValue *this_val,
+                              int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.fs.read(path): need string");
+    }
+    const char *app = current_app_id_or_null();
+    if (!app) return JS_NULL;
+
+    JSCStringBuf pbuf;
+    size_t plen = 0;
+    const char *p = JS_ToCStringLen(ctx, &plen, argv[0], &pbuf);
+    if (!p) return JS_EXCEPTION;
+
+    uint8_t *data = NULL;
+    size_t   dlen = 0;
+    esp_err_t e = dynapp_user_data_read(app, p, &data, &dlen);
+    if (e != ESP_OK) {
+        return JS_NULL;
+    }
+    JSValue v = JS_NewStringLen(ctx, (const char *)data, dlen);
+    dynapp_script_store_release(data);
+    return v;
+}
+
+/* sys.fs.write(path, content) -> bool   入队即 true，失败只 log */
+static JSValue js_sys_fs_write(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 2 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
+        return JS_ThrowTypeError(ctx, "sys.fs.write(path, content): need (string, string)");
+    }
+    const char *app = current_app_id_or_null();
+    if (!app) return JS_NewBool(0);
+
+    JSCStringBuf pbuf, cbuf;
+    size_t plen = 0, clen = 0;
+    const char *p = JS_ToCStringLen(ctx, &plen, argv[0], &pbuf);
+    if (!p) return JS_EXCEPTION;
+    const char *c = JS_ToCStringLen(ctx, &clen, argv[1], &cbuf);
+    if (!c) return JS_EXCEPTION;
+
+    /* 入队的 chunk 上限 196B；超过的拒掉（MVP 限制，后续可改成大文件分段） */
+    bool ok = dynapp_fs_worker_submit_user_write(app, p, (const uint8_t *)c, clen);
+    if (!ok) ESP_LOGW(TAG, "fs.write: queue refused or oversize (%u B)", (unsigned)clen);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+/* sys.fs.exists(path) -> bool */
+static JSValue js_sys_fs_exists(JSContext *ctx, JSValue *this_val,
+                                int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.fs.exists(path): need string");
+    }
+    const char *app = current_app_id_or_null();
+    if (!app) return JS_NewBool(0);
+
+    JSCStringBuf pbuf;
+    size_t plen = 0;
+    const char *p = JS_ToCStringLen(ctx, &plen, argv[0], &pbuf);
+    if (!p) return JS_EXCEPTION;
+    return JS_NewBool(dynapp_user_data_exists(app, p) ? 1 : 0);
+}
+
+/* sys.fs.remove(path) -> bool   入队即 true */
+static JSValue js_sys_fs_remove(JSContext *ctx, JSValue *this_val,
+                                int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.fs.remove(path): need string");
+    }
+    const char *app = current_app_id_or_null();
+    if (!app) return JS_NewBool(0);
+
+    JSCStringBuf pbuf;
+    size_t plen = 0;
+    const char *p = JS_ToCStringLen(ctx, &plen, argv[0], &pbuf);
+    if (!p) return JS_EXCEPTION;
+    bool ok = dynapp_fs_worker_submit_user_remove(app, p);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+/* sys.fs.list() -> [string, ...]   列出 data/ 下所有文件名 */
+static JSValue js_sys_fs_list(JSContext *ctx, JSValue *this_val,
+                              int argc, JSValue *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    const char *app = current_app_id_or_null();
+    int n = 0;
+    char names[16][DYNAPP_USER_DATA_MAX_PATH + 1];
+    if (app) n = dynapp_user_data_list(app, names, 16);
+
+    JSValue arr = JS_NewArray(ctx, n);
+    if (JS_IsException(arr)) return arr;
+    for (int i = 0; i < n; i++) {
+        JSValue s = JS_NewString(ctx, names[i]);
+        (void)JS_SetPropertyUint32(ctx, arr, (uint32_t)i, s);
+    }
+    return arr;
+}
+
+/* ============================================================================
  * §6. tick 循环服务
  *
  *   被 dynamic_app.c 的 script_task 主循环周期性调用。
@@ -730,6 +859,11 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_ble_send                = (int)base_count + 16;
     rt->func_idx_sys_ble_on_recv             = (int)base_count + 17;
     rt->func_idx_sys_ble_is_connected        = (int)base_count + 18;
+    rt->func_idx_sys_fs_read                 = (int)base_count + 19;
+    rt->func_idx_sys_fs_write                = (int)base_count + 20;
+    rt->func_idx_sys_fs_exists               = (int)base_count + 21;
+    rt->func_idx_sys_fs_remove               = (int)base_count + 22;
+    rt->func_idx_sys_fs_list                 = (int)base_count + 23;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -751,6 +885,11 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_ble_send,                js_sys_ble_send,                1);
     DEF_CFN(func_idx_sys_ble_on_recv,             js_sys_ble_on_recv,             1);
     DEF_CFN(func_idx_sys_ble_is_connected,        js_sys_ble_is_connected,        0);
+    DEF_CFN(func_idx_sys_fs_read,                 js_sys_fs_read,                 1);
+    DEF_CFN(func_idx_sys_fs_write,                js_sys_fs_write,                2);
+    DEF_CFN(func_idx_sys_fs_exists,               js_sys_fs_exists,               1);
+    DEF_CFN(func_idx_sys_fs_remove,               js_sys_fs_remove,               1);
+    DEF_CFN(func_idx_sys_fs_list,                 js_sys_fs_list,                 0);
 }
 
 #undef DEF_CFN
@@ -781,6 +920,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     JSValue time    = JS_NewObject(ctx);
     JSValue app     = JS_NewObject(ctx);
     JSValue ble     = JS_NewObject(ctx);
+    JSValue fs      = JS_NewObject(ctx);
     JSValue symbols = JS_NewObject(ctx);
     JSValue style   = JS_NewObject(ctx);
     JSValue align   = JS_NewObject(ctx);
@@ -808,6 +948,13 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(ble, "send",        func_idx_sys_ble_send);
     BIND_FN(ble, "onRecv",      func_idx_sys_ble_on_recv);
     BIND_FN(ble, "isConnected", func_idx_sys_ble_is_connected);
+
+    /* sys.fs.* —— 当前 app 沙箱文件 IO（apps/<id>/data/ 下） */
+    BIND_FN(fs, "read",   func_idx_sys_fs_read);
+    BIND_FN(fs, "write",  func_idx_sys_fs_write);
+    BIND_FN(fs, "exists", func_idx_sys_fs_exists);
+    BIND_FN(fs, "remove", func_idx_sys_fs_remove);
+    BIND_FN(fs, "list",   func_idx_sys_fs_list);
 
     /* sys.symbols.* —— LVGL 内置 UTF-8 图标字面量 */
     (void)JS_SetPropertyStr(ctx, symbols, "BLUETOOTH", JS_NewString(ctx, LV_SYMBOL_BLUETOOTH));
@@ -858,6 +1005,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, sys, "time",    time);
     (void)JS_SetPropertyStr(ctx, sys, "app",     app);
     (void)JS_SetPropertyStr(ctx, sys, "ble",     ble);
+    (void)JS_SetPropertyStr(ctx, sys, "fs",      fs);
     (void)JS_SetPropertyStr(ctx, sys, "symbols", symbols);
     (void)JS_SetPropertyStr(ctx, sys, "style",   style);
     (void)JS_SetPropertyStr(ctx, sys, "align",   align);

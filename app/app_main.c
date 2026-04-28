@@ -21,7 +21,7 @@
 #include "time_storage.h"
 #include "dynamic_app.h"
 #include "dynamic_app_registry.h"
-#include "dynapp_upload_manager.h"
+#include "dynapp_fs_worker.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -29,8 +29,8 @@
 
 static const char *TAG = "app_main";
 
-/* 运行中检测 hook：upload manager 在删脚本前调一次。
- * 跑在 manager consumer task，仅读取 dynamic_app_registry 静态字段，安全。
+/* 运行中检测 hook：fs_worker 在删脚本前调一次。
+ * 跑在 fs_worker task，仅读取 dynamic_app_registry 静态字段，安全。
  * page_router_get_current 也是纯读，不动 LVGL。 */
 static bool is_app_running(const char *name)
 {
@@ -104,9 +104,9 @@ esp_err_t app_main_init(void)
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
 
-    /* 注入"运行中检测"hook，让 upload manager 拒绝删除当前正在跑的 app。
+    /* 注入"运行中检测"hook，让 fs_worker 拒绝删除当前正在跑的 app。
      * 必须在 page_router_init 之后注册（hook 内部读 page_router_get_current）。 */
-    dynapp_upload_manager_set_running_check(is_app_running);
+    dynapp_fs_worker_set_running_check(is_app_running);
 
     /*
      * UI 任务固定在 Core1：

@@ -236,17 +236,25 @@ class UploadView(ctk.CTkFrame):
         row2 = ctk.CTkFrame(self, fg_color=COLOR_PANEL, corner_radius=10)
         row2.grid(row=1, column=0, sticky="ew", padx=14, pady=8)
         row2.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(row2, text="Name", text_color=COLOR_MUTED,
-                     width=60, anchor="w").grid(row=0, column=0, padx=(14, 4), pady=(10, 4))
+        ctk.CTkLabel(row2, text="App ID", text_color=COLOR_MUTED,
+                     width=70, anchor="w").grid(row=0, column=0, padx=(14, 4), pady=(10, 4))
         self._name_entry = ctk.CTkEntry(row2, fg_color=COLOR_PANEL_HI,
-                                        text_color=COLOR_TEXT, border_width=0)
+                                        text_color=COLOR_TEXT, border_width=0,
+                                        placeholder_text="e.g. alarm  (a-z 0-9 _ -)")
         self._name_entry.grid(row=0, column=1, columnspan=2, sticky="ew",
                               padx=4, pady=(10, 4))
+        ctk.CTkLabel(row2, text="Display", text_color=COLOR_MUTED,
+                     width=70, anchor="w").grid(row=1, column=0, padx=(14, 4), pady=(0, 4))
+        self._display_entry = ctk.CTkEntry(row2, fg_color=COLOR_PANEL_HI,
+                                            text_color=COLOR_TEXT, border_width=0,
+                                            placeholder_text="manifest.name (中文 OK)")
+        self._display_entry.grid(row=1, column=1, columnspan=2, sticky="ew",
+                                  padx=4, pady=(0, 4))
         ctk.CTkLabel(row2, text="Size", text_color=COLOR_MUTED,
-                     width=60, anchor="w").grid(row=1, column=0, padx=(14, 4), pady=(0, 10))
+                     width=70, anchor="w").grid(row=2, column=0, padx=(14, 4), pady=(0, 10))
         self._meta_lbl = ctk.CTkLabel(row2, text="—", text_color=COLOR_TEXT,
                                       anchor="w")
-        self._meta_lbl.grid(row=1, column=1, columnspan=2, sticky="ew",
+        self._meta_lbl.grid(row=2, column=1, columnspan=2, sticky="ew",
                             padx=4, pady=(0, 10))
 
         # —— 进度条 ——
@@ -280,20 +288,22 @@ class UploadView(ctk.CTkFrame):
 
     def _on_browse(self) -> None:
         path = filedialog.askopenfilename(
-            title="Select dynamic app .js",
+            title="Select dynamic app .js (main.js)",
             filetypes=[("JavaScript", "*.js"), ("All files", "*.*")])
         if not path:
             return
         self._file_path = path
         self._file_lbl.configure(text=os.path.basename(path))
 
-        # 自动从文件名推断 app 名（去掉 .js 后缀）
+        # 自动从文件名推断 app_id（去掉 .js 后缀）
         guess = os.path.splitext(os.path.basename(path))[0]
         guess = guess[:NAME_LEN]
         self._name_entry.delete(0, "end")
         self._name_entry.insert(0, guess)
+        # display 字段默认 = app_id；用户可改成中文名
+        self._display_entry.delete(0, "end")
+        self._display_entry.insert(0, guess)
 
-        # 元信息
         try:
             sz = os.path.getsize(path)
             self._meta_lbl.configure(text=f"{sz:,} bytes")
@@ -308,27 +318,29 @@ class UploadView(ctk.CTkFrame):
         if not self._file_path:
             self._set_progress_text("no file selected", COLOR_ERR)
             return
-        name = self._name_entry.get().strip()
-        if not name:
-            self._set_progress_text("name empty", COLOR_ERR)
+        app_id = self._name_entry.get().strip()
+        if not app_id:
+            self._set_progress_text("app_id empty", COLOR_ERR)
             return
+        display = self._display_entry.get().strip() or app_id
 
         path = self._file_path
         client = self._state.client
         self._upload_btn.configure(state="disabled")
         self._progress.set(0)
         self._set_progress_text("uploading...", COLOR_WARN)
-        self._log("upload", f"start {name} ({path})")
+        self._log("upload", f"start {app_id} ({path})")
 
-        # progress 回调跑在 asyncio 线程，要切回 UI
         def on_progress(sent: int, total: int) -> None:
             self.after(0, self._update_progress, sent, total)
 
         async def coro() -> None:
-            await client.upload_file(name, path, on_progress=on_progress)
+            await client.upload_app(app_id, path,
+                                    display_name=display,
+                                    on_progress=on_progress)
 
         fut = self._bridge.submit(coro())
-        fut.add_done_callback(lambda f: self.after(0, self._on_upload_done, f, name))
+        fut.add_done_callback(lambda f: self.after(0, self._on_upload_done, f, app_id))
 
     def _update_progress(self, sent: int, total: int) -> None:
         self._progress.set(sent / total if total else 0)

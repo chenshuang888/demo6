@@ -1,13 +1,12 @@
 /* ============================================================================
  * dynapp_upload_service.c —— 动态 App 上传 BLE service
  *
- * 与 dynapp_bridge_service 完全独立：UUID 段不同 (a3a4 vs a3a3)，
- * 协议格式不同（这里是二进制定长头，bridge 是透传）。
+ * 协议变更（与旧版不兼容）：
+ *   - START.name 字段从 15B 扩为 31B，承载 "<app_id>/<filename>"
+ *     例 "alarm/main.js" / "alarm/manifest.json"
+ *   - DELETE.name 仍是 15B（仅 app_id；删整个 app 目录）
  *
- * access_cb 职责：
- *   1) 解协议头 (op/seq/len)
- *   2) 解出 payload，调 manager submit_*
- *   3) 立刻 return（FS 写在 manager 的 consumer task 里做）
+ * GATT UUID 不变，PC 端 dynapp_uploader 同步升级。
  * ========================================================================= */
 
 #include "dynapp_upload_service.h"
@@ -28,12 +27,10 @@ static const ble_uuid128_t s_svc_uuid = BLE_UUID128_INIT(
     0xf6, 0xe0, 0xc7, 0xe0, 0xa1, 0x4f, 0x7e, 0xb8,
     0xef, 0x4a, 0x00, 0x00, 0x01, 0x00, 0xa4, 0xa3
 );
-/* rx (WRITE):     a3a40002 */
 static const ble_uuid128_t s_rx_uuid = BLE_UUID128_INIT(
     0xf6, 0xe0, 0xc7, 0xe0, 0xa1, 0x4f, 0x7e, 0xb8,
     0xef, 0x4a, 0x00, 0x00, 0x02, 0x00, 0xa4, 0xa3
 );
-/* status (NOTIFY): a3a40003 */
 static const ble_uuid128_t s_status_uuid = BLE_UUID128_INIT(
     0xf6, 0xe0, 0xc7, 0xe0, 0xa1, 0x4f, 0x7e, 0xb8,
     0xef, 0x4a, 0x00, 0x00, 0x03, 0x00, 0xa4, 0xa3
@@ -43,13 +40,10 @@ static uint16_t s_rx_handle;
 static uint16_t s_status_handle;
 static volatile bool s_status_subscribed = false;
 
-/* 当前 op 的 seq，access_cb 暂存给 status_cb echo 用。
- * 一次只处理一帧，简单全局变量足够。 */
-static volatile uint8_t s_last_seq = 0;
-
-#define HEADER_LEN  4   /* op+seq+len_lo+len_hi */
-#define NAME_LEN    15
-#define MAX_PAYLOAD 200
+#define HEADER_LEN     4
+#define ID_LEN         15      /* 仅 app_id（DELETE 用） */
+#define PATH_LEN       31      /* "<app_id>/<filename>"，START 用 */
+#define MAX_PAYLOAD    200
 
 /* ============================================================================
  * §1. 协议小工具
@@ -64,11 +58,11 @@ static inline void wr_u32le(uint8_t *p, uint32_t v) {
     p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
 }
 
-/* 从 NUL-padded 15B 取 C 字符串到 out。out 容量 ≥ 16。 */
-static void copy_name(char *out, const uint8_t *src)
+/* 从 NUL-padded 区间取 C 字符串到 out。out 容量 ≥ field_len + 1。 */
+static void copy_field(char *out, const uint8_t *src, size_t field_len)
 {
-    memcpy(out, src, NAME_LEN);
-    out[NAME_LEN] = '\0';
+    memcpy(out, src, field_len);
+    out[field_len] = '\0';
 }
 
 /* ============================================================================
@@ -84,21 +78,19 @@ static void handle_frame(const uint8_t *frame, uint16_t total)
     const uint8_t *pay = frame + HEADER_LEN;
 
     if ((uint32_t)HEADER_LEN + pay_len > total) {
-        ESP_LOGW(TAG, "frame: declared payload %u > avail %u", pay_len, total - HEADER_LEN);
+        ESP_LOGW(TAG, "frame: declared payload %u > avail %u",
+                 pay_len, total - HEADER_LEN);
         return;
     }
-    s_last_seq = seq;
 
     switch (op) {
     case UPL_OP_START: {
-        if (pay_len < NAME_LEN + 8) { ESP_LOGW(TAG, "START short"); return; }
-        char name[NAME_LEN + 1];
-        copy_name(name, pay);
-        uint32_t total_len = rd_u32le(pay + NAME_LEN);
-        uint32_t crc       = rd_u32le(pay + NAME_LEN + 4);
-        if (!dynapp_upload_submit_start(name, total_len, crc)) {
-            ESP_LOGW(TAG, "submit_start refused (queue full?)");
-        }
+        if (pay_len < PATH_LEN + 8) { ESP_LOGW(TAG, "START short"); return; }
+        char path[PATH_LEN + 1];
+        copy_field(path, pay, PATH_LEN);
+        uint32_t total_len = rd_u32le(pay + PATH_LEN);
+        uint32_t crc       = rd_u32le(pay + PATH_LEN + 4);
+        (void)dynapp_upload_submit_start(path, total_len, crc, seq);
         break;
     }
     case UPL_OP_CHUNK: {
@@ -106,23 +98,21 @@ static void handle_frame(const uint8_t *frame, uint16_t total)
         uint32_t off = rd_u32le(pay);
         const uint8_t *data = pay + 4;
         uint16_t dlen = pay_len - 4;
-        if (!dynapp_upload_submit_chunk(off, data, dlen)) {
-            ESP_LOGW(TAG, "submit_chunk refused");
-        }
+        (void)dynapp_upload_submit_chunk(off, data, dlen, seq);
         break;
     }
     case UPL_OP_END:
-        if (!dynapp_upload_submit_end()) ESP_LOGW(TAG, "submit_end refused");
+        (void)dynapp_upload_submit_end(seq);
         break;
     case UPL_OP_DELETE: {
-        if (pay_len < NAME_LEN) { ESP_LOGW(TAG, "DELETE short"); return; }
-        char name[NAME_LEN + 1];
-        copy_name(name, pay);
-        if (!dynapp_upload_submit_delete(name)) ESP_LOGW(TAG, "submit_delete refused");
+        if (pay_len < ID_LEN) { ESP_LOGW(TAG, "DELETE short"); return; }
+        char id[ID_LEN + 1];
+        copy_field(id, pay, ID_LEN);
+        (void)dynapp_upload_submit_delete(id, seq);
         break;
     }
     case UPL_OP_LIST:
-        if (!dynapp_upload_submit_list()) ESP_LOGW(TAG, "submit_list refused");
+        (void)dynapp_upload_submit_list(seq);
         break;
     default:
         ESP_LOGW(TAG, "unknown op 0x%02x", op);
@@ -138,17 +128,14 @@ static int rx_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                         struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
-
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
     if (len == 0 || len > MAX_PAYLOAD) {
         ESP_LOGW(TAG, "rx bad len=%u", len);
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     }
-
     uint8_t buf[MAX_PAYLOAD];
     int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), NULL);
     if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-
     handle_frame(buf, len);
     return 0;
 }
@@ -156,7 +143,6 @@ static int rx_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 static int status_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                             struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    /* status char 主要靠 NOTIFY 推送；READ 仅占位。 */
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
     uint8_t z = 0;
     return os_mbuf_append(ctxt->om, &z, 1) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
@@ -190,13 +176,10 @@ static const struct ble_gatt_svc_def s_svcs[] = {
 };
 
 /* ============================================================================
- * §5. status notify 回调（manager → service → BLE）
- *
- * 注意：本函数跑在 manager 的 consumer task 线程。NimBLE notify API 自带锁，
- * 跨线程调安全；但不要在这里碰 LVGL 或写 FS。
+ * §5. status notify
  * ========================================================================= */
 
-static void send_status(uint8_t op_echo, uint8_t result,
+static void send_status(uint8_t op_echo, uint8_t result, uint8_t seq_echo,
                         const uint8_t *payload, uint16_t payload_len)
 {
     if (!s_status_subscribed) return;
@@ -207,7 +190,7 @@ static void send_status(uint8_t op_echo, uint8_t result,
     if (4u + payload_len > sizeof(buf)) return;
     buf[0] = op_echo;
     buf[1] = result;
-    buf[2] = s_last_seq;
+    buf[2] = seq_echo;
     buf[3] = 0;
     if (payload && payload_len) memcpy(buf + 4, payload, payload_len);
 
@@ -218,22 +201,22 @@ static void send_status(uint8_t op_echo, uint8_t result,
 }
 
 static void on_manager_status(upload_op_t op, upload_result_t result,
-                             const char *name, uint32_t extra,
+                             uint8_t seq, const char *name, uint32_t extra,
                              const uint8_t *list_buf, size_t list_len)
 {
-    (void)name;  /* PC 已经从 last_seq 知道是哪一帧；name 只用作日志 */
+    (void)name;
 
     if (op == UPL_OP_LIST && result == UPL_RESULT_OK && list_buf && list_len > 0) {
-        send_status((uint8_t)op, (uint8_t)result, list_buf, (uint16_t)list_len);
+        send_status((uint8_t)op, (uint8_t)result, seq, list_buf, (uint16_t)list_len);
         return;
     }
     if (op == UPL_OP_CHUNK && result == UPL_RESULT_OK) {
         uint8_t pay[4];
         wr_u32le(pay, extra);
-        send_status((uint8_t)op, (uint8_t)result, pay, sizeof(pay));
+        send_status((uint8_t)op, (uint8_t)result, seq, pay, sizeof(pay));
         return;
     }
-    send_status((uint8_t)op, (uint8_t)result, NULL, 0);
+    send_status((uint8_t)op, (uint8_t)result, seq, NULL, 0);
 }
 
 /* ============================================================================
@@ -255,7 +238,6 @@ esp_err_t dynapp_upload_service_init(void)
 {
     ESP_LOGI(TAG, "Initializing BLE Dynamic App Upload service");
 
-    /* manager 必须先起来，service 注册的 access_cb 一旦被调就要能 submit。 */
     esp_err_t err = dynapp_upload_manager_init(on_manager_status);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "manager init failed: %d", err);
@@ -272,7 +254,6 @@ esp_err_t dynapp_upload_service_init(void)
         ESP_LOGE(TAG, "register subscribe failed: %d", err);
         return err;
     }
-
     ESP_LOGI(TAG, "Service UUID: a3a40001-0000-4aef-b87e-4fa1e0c7e0f6 (rx + status)");
     return ESP_OK;
 }

@@ -13,7 +13,9 @@ STATUS_UUID = "a3a40003-0000-4aef-b87e-4fa1e0c7e0f6"   # ESP → PC, READ + NOTI
 HEADER_LEN = 4          # [op][seq][len_lo][len_hi]
 MAX_FRAME  = 200        # 与固件 MAX_PAYLOAD 一致
 MAX_CHUNK  = MAX_FRAME - HEADER_LEN - 4   # 减去 header + chunk 内的 offset(4B)
-NAME_LEN   = 15
+NAME_LEN   = 15         # app_id 长度上限（DELETE 用）
+PATH_LEN   = 31         # "<app_id>/<filename>" 长度上限（START 用）
+FNAME_LEN  = 31         # filename 长度上限
 
 MAX_SCRIPT_BYTES = 64 * 1024    # DYNAPP_SCRIPT_STORE_MAX_BYTES
 

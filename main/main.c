@@ -12,6 +12,7 @@
 #include "dynapp_bridge_service.h"
 #include "dynapp_upload_service.h"
 #include "dynapp_script_store.h"
+#include "dynapp_fs_worker.h"
 #include "time_manager.h"
 #include "weather_manager.h"
 #include "notify_manager.h"
@@ -51,6 +52,9 @@ void app_main(void)
     // 挂载 LittleFS（动态 App 脚本、未来日志/缓存都从这里走 fopen/fread）
     ESP_ERROR_CHECK(fs_littlefs_init());
     ESP_ERROR_CHECK(dynapp_script_store_init());
+    // 启动 LittleFS 串行写入 worker（任何线程都能非阻塞地丢任务）
+    // 必须在 BLE upload service / dynamic_app 之前，否则 submit 会失败
+    ESP_ERROR_CHECK(dynapp_fs_worker_init());
 
     // 恢复上次关机前的时间；失败走硬编码默认
     struct timeval tv;

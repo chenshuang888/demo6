@@ -23,7 +23,7 @@ from bleak import BleakClient, BleakScanner
 
 from .constants import (
     DEFAULT_DEVICE_NAME_HINT,
-    MAX_CHUNK, MAX_SCRIPT_BYTES, NAME_LEN,
+    MAX_CHUNK, MAX_SCRIPT_BYTES, NAME_LEN, PATH_LEN,
     OP_CHUNK, OP_END, OP_START, OP_DELETE, OP_LIST,
     RESULT_OK, RESULT_NAMES,
     RX_UUID, STATUS_UUID, SVC_UUID,
@@ -141,24 +141,27 @@ class UploaderClient:
 
     async def upload_file(
         self,
-        name: str,
-        path: str,
+        path_in_fs: str,
+        local_path: str,
         *,
         on_progress: Optional[ProgressCb] = None,
     ) -> None:
-        with open(path, "rb") as f:
+        """path_in_fs 形如 "alarm/main.js"。"""
+        with open(local_path, "rb") as f:
             data = f.read()
-        await self.upload_bytes(name, data, on_progress=on_progress)
+        await self.upload_bytes(path_in_fs, data, on_progress=on_progress)
 
     async def upload_bytes(
         self,
-        name: str,
+        path_in_fs: str,
         data: bytes,
         *,
         on_progress: Optional[ProgressCb] = None,
     ) -> None:
-        if len(name.encode("ascii")) > NAME_LEN:
-            raise ValueError(f"name too long (max {NAME_LEN}): {name}")
+        if "/" not in path_in_fs:
+            raise ValueError(f"path must be '<app_id>/<filename>', got {path_in_fs!r}")
+        if len(path_in_fs.encode("ascii")) > PATH_LEN:
+            raise ValueError(f"path too long (max {PATH_LEN}): {path_in_fs}")
         if not data:
             raise ValueError("empty payload")
         if len(data) > MAX_SCRIPT_BYTES:
@@ -166,13 +169,11 @@ class UploaderClient:
 
         total = len(data)
         crc = crc32_of(data)
-        logger.info("upload %s: %d B, crc=0x%08x", name, total, crc)
+        logger.info("upload %s: %d B, crc=0x%08x", path_in_fs, total, crc)
 
-        # START
-        st = await self._send_and_wait(pack_start(name, total, crc, self._next_seq()))
+        st = await self._send_and_wait(pack_start(path_in_fs, total, crc, self._next_seq()))
         self._raise_if_bad(st, "START")
 
-        # CHUNKs
         sent = 0
         for offset, chunk in chunk_iter(data, MAX_CHUNK):
             st = await self._send_and_wait(pack_chunk(offset, chunk, self._next_seq()))
@@ -181,20 +182,39 @@ class UploaderClient:
             if on_progress:
                 on_progress(sent, total)
 
-        # END
         st = await self._send_and_wait(pack_end(self._next_seq()))
         self._raise_if_bad(st, "END")
-        logger.info("upload %s: done", name)
+        logger.info("upload %s: done", path_in_fs)
+
+    async def upload_app(
+        self,
+        app_id: str,
+        main_js_path: str,
+        *,
+        display_name: Optional[str] = None,
+        on_progress: Optional[ProgressCb] = None,
+    ) -> None:
+        """上传一个完整的 app：先 manifest.json，再 main.js。
+
+        display_name: manifest.name 字段；缺省时用 app_id 占位。
+        on_progress: 仅给 main.js 用（manifest 太小不报告进度）。
+        """
+        import json
+        manifest = {"id": app_id, "name": display_name or app_id, "version": "1.0.0"}
+        manifest_bytes = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+        await self.upload_bytes(f"{app_id}/manifest.json", manifest_bytes)
+        await self.upload_file(f"{app_id}/main.js", main_js_path, on_progress=on_progress)
 
     async def list_apps(self) -> list[str]:
         st = await self._send_and_wait(pack_list(self._next_seq()))
         self._raise_if_bad(st, "LIST")
         return st.names
 
-    async def delete_app(self, name: str) -> None:
-        st = await self._send_and_wait(pack_delete(name, self._next_seq()))
+    async def delete_app(self, app_id: str) -> None:
+        """删除整个 app 目录（含 main.js / manifest.json / data/）。"""
+        st = await self._send_and_wait(pack_delete(app_id, self._next_seq()))
         self._raise_if_bad(st, "DELETE")
-        logger.info("deleted %s", name)
+        logger.info("deleted %s", app_id)
 
     # ------------------------------------------------------------------
     # 底层

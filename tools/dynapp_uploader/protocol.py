@@ -6,10 +6,11 @@
     rx (PC → ESP):
         [1B op][1B seq][2B payload_len][payload...]
 
-        op 0x01 START   payload = name(15B,NUL pad) + total_len(4B) + crc32(4B) = 23B
+        op 0x01 START   payload = path(31B,NUL pad) + total_len(4B) + crc32(4B) = 39B
+                        path = "<app_id>/<filename>" 例 "alarm/main.js"
         op 0x02 CHUNK   payload = offset(4B) + data(...)
         op 0x03 END     payload = (空)
-        op 0x10 DELETE  payload = name(15B,NUL pad) = 15B
+        op 0x10 DELETE  payload = app_id(15B,NUL pad) = 15B   （删整个 app 目录）
         op 0x11 LIST    payload = (空)
 
     status notify (ESP → PC):
@@ -24,7 +25,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .constants import (
-    HEADER_LEN, MAX_CHUNK, NAME_LEN,
+    HEADER_LEN, MAX_CHUNK, NAME_LEN, PATH_LEN,
     OP_START, OP_CHUNK, OP_END, OP_DELETE, OP_LIST,
 )
 
@@ -33,14 +34,25 @@ from .constants import (
 # helpers
 # =============================================================================
 
-def _pack_name(name: str) -> bytes:
-    """编码 app 名为 15B NUL-padded ASCII。"""
-    if not name:
-        raise ValueError("name must be non-empty")
-    raw = name.encode("ascii")  # 名字限制 [a-zA-Z0-9_-]
-    if len(raw) > NAME_LEN:
-        raise ValueError(f"name too long: {len(raw)} > {NAME_LEN}")
-    return raw + b"\x00" * (NAME_LEN - len(raw))
+def _pack_fixed(s: str, width: int, label: str) -> bytes:
+    """编码字符串为 NUL-padded ASCII（width 字节）。"""
+    if not s:
+        raise ValueError(f"{label} must be non-empty")
+    raw = s.encode("ascii")
+    if len(raw) > width:
+        raise ValueError(f"{label} too long: {len(raw)} > {width}")
+    return raw + b"\x00" * (width - len(raw))
+
+
+def _pack_app_id(name: str) -> bytes:
+    return _pack_fixed(name, NAME_LEN, "app_id")
+
+
+def _pack_path(path: str) -> bytes:
+    """编码 "<app_id>/<filename>" 为 31B NUL-padded ASCII。"""
+    if "/" not in path:
+        raise ValueError(f"path must be '<app_id>/<filename>', got {path!r}")
+    return _pack_fixed(path, PATH_LEN, "path")
 
 
 def _build_frame(op: int, seq: int, payload: bytes) -> bytes:
@@ -55,8 +67,9 @@ def _build_frame(op: int, seq: int, payload: bytes) -> bytes:
 # pack
 # =============================================================================
 
-def pack_start(name: str, total_len: int, crc32: int, seq: int) -> bytes:
-    payload = _pack_name(name) + struct.pack("<II", total_len, crc32 & 0xFFFFFFFF)
+def pack_start(path: str, total_len: int, crc32: int, seq: int) -> bytes:
+    """path 形如 "alarm/main.js"。"""
+    payload = _pack_path(path) + struct.pack("<II", total_len, crc32 & 0xFFFFFFFF)
     return _build_frame(OP_START, seq, payload)
 
 
@@ -73,8 +86,9 @@ def pack_end(seq: int) -> bytes:
     return _build_frame(OP_END, seq, b"")
 
 
-def pack_delete(name: str, seq: int) -> bytes:
-    return _build_frame(OP_DELETE, seq, _pack_name(name))
+def pack_delete(app_id: str, seq: int) -> bytes:
+    """删除整个 app 目录。"""
+    return _build_frame(OP_DELETE, seq, _pack_app_id(app_id))
 
 
 def pack_list(seq: int) -> bytes:

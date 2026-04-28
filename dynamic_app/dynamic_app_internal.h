@@ -97,6 +97,11 @@ typedef struct {
     int func_idx_sys_ble_send;
     int func_idx_sys_ble_on_recv;
     int func_idx_sys_ble_is_connected;
+    int func_idx_sys_fs_read;
+    int func_idx_sys_fs_write;
+    int func_idx_sys_fs_exists;
+    int func_idx_sys_fs_remove;
+    int func_idx_sys_fs_list;
 } dynamic_app_runtime_t;
 
 /* 全局唯一实例。定义在 dynamic_app.c。 */
@@ -128,7 +133,7 @@ esp_err_t dynamic_app_runtime_eval_app(JSContext *ctx);      /* eval 嵌入的 a
  * 历史教训：之前散落两处常量（这里 + register 里硬编码 idx 上限），
  * 加 BLE 时漏改这里 → cfunc_table 越界 → 踩坏 PSRAM 堆元数据 →
  * 下一次 heap_caps_malloc 触发 TLSF assert "prev_free can not be null"。 */
-#define DYNAMIC_APP_EXTRA_NATIVE_COUNT 19
+#define DYNAMIC_APP_EXTRA_NATIVE_COUNT 24
 
 /* 在 cfunc_table 里登记所有自定义 native 的 JSCFunctionDef。
  * runtime.c 在分配 cfunc_table 之后调一次。 */

@@ -8,6 +8,7 @@ idf_component_register(
         # LittleFS 子层（KB-MB 级文件，动态 App 脚本仓 + 未来日志/缓存）
         "littlefs/fs_littlefs.c"
         "littlefs/dynapp_script_store.c"
+        "littlefs/dynapp_fs_worker.c"
     INCLUDE_DIRS
         # 保持调用方 `#include "persist.h"` / `#include "fs_littlefs.h"` 不变
         "nvs"
@@ -16,4 +17,5 @@ idf_component_register(
         nvs_flash
         esp_timer
         joltwallet__littlefs
+        freertos
 )
