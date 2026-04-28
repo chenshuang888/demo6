@@ -35,6 +35,7 @@ typedef enum {
     UI_OBJ_LABEL = 1,
     UI_OBJ_PANEL,
     UI_OBJ_BUTTON,
+    UI_OBJ_IMAGE,
 } ui_obj_type_t;
 
 /* 注册表项：JS 用字符串 id 索引，C 端持有 LVGL 对象指针 */

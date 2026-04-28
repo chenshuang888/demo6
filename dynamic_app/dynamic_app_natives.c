@@ -187,6 +187,81 @@ static JSValue js_sys_ui_create_button(JSContext *ctx, JSValue *this_val, int ar
         dynamic_app_ui_enqueue_create_button);
 }
 
+/* sys.ui.createImage(id, parent, src?)
+ *   id     : 节点 id
+ *   parent : string|null|undefined（同 createPanel）
+ *   src    : 资源相对名（相对当前 app 的 assets/，如 "fish.bin"）；可省略
+ */
+static JSValue js_sys_ui_create_image(JSContext *ctx, JSValue *this_val,
+                                      int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx,
+            "sys.ui.createImage(id, parent?, src?) args missing");
+    }
+
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+
+    parent_str_t ph;
+    const char *pid = NULL;
+    size_t plen = 0;
+    if (argc >= 2 && !extract_parent_id(ctx, argv[1], &pid, &plen, &ph)) {
+        return JS_EXCEPTION;
+    }
+
+    JSCStringBuf src_buf;
+    const char *src = NULL;
+    size_t slen = 0;
+    bool src_valid = false;
+    if (argc >= 3 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2])) {
+        if (!JS_IsString(ctx, argv[2])) {
+            return JS_ThrowTypeError(ctx, "sys.ui.createImage: src must be string|null");
+        }
+        src = JS_ToCStringLen(ctx, &slen, argv[2], &src_buf);
+        if (!src) return JS_EXCEPTION;
+        src_valid = true;
+    }
+
+    bool ok = dynamic_app_ui_enqueue_create_image(id, id_len,
+                                                  pid, plen,
+                                                  src_valid ? src : NULL,
+                                                  src_valid ? slen : 0);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+/* sys.ui.setImageSrc(id, src)  src=null/"" → 清空 */
+static JSValue js_sys_ui_set_image_src(JSContext *ctx, JSValue *this_val,
+                                       int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "sys.ui.setImageSrc(id, src) args missing");
+    }
+
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+
+    JSCStringBuf src_buf;
+    const char *src = NULL;
+    size_t slen = 0;
+    if (!JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        if (!JS_IsString(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "sys.ui.setImageSrc: src must be string|null");
+        }
+        src = JS_ToCStringLen(ctx, &slen, argv[1], &src_buf);
+        if (!src) return JS_EXCEPTION;
+    }
+
+    (void)dynamic_app_ui_enqueue_set_image_src(id, id_len, src, slen);
+    return JS_UNDEFINED;
+}
+
 /* sys.ui.setStyle(id, key, a, b?, c?, d?)
  *   注：JS_ToInt32 在 esp-mquickjs 是 (ctx, int*, val)，
  *       int32_t* 不兼容（xtensa 上 int32_t = long int），必须用 int 接。
@@ -864,6 +939,8 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_fs_exists               = (int)base_count + 21;
     rt->func_idx_sys_fs_remove               = (int)base_count + 22;
     rt->func_idx_sys_fs_list                 = (int)base_count + 23;
+    rt->func_idx_sys_ui_create_image         = (int)base_count + 24;
+    rt->func_idx_sys_ui_set_image_src        = (int)base_count + 25;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -890,6 +967,8 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_fs_exists,               js_sys_fs_exists,               1);
     DEF_CFN(func_idx_sys_fs_remove,               js_sys_fs_remove,               1);
     DEF_CFN(func_idx_sys_fs_list,                 js_sys_fs_list,                 0);
+    DEF_CFN(func_idx_sys_ui_create_image,         js_sys_ui_create_image,         3);
+    DEF_CFN(func_idx_sys_ui_set_image_src,        js_sys_ui_set_image_src,        2);
 }
 
 #undef DEF_CFN
@@ -931,6 +1010,8 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(ui, "createLabel",        func_idx_sys_ui_create_label);
     BIND_FN(ui, "createPanel",        func_idx_sys_ui_create_panel);
     BIND_FN(ui, "createButton",       func_idx_sys_ui_create_button);
+    BIND_FN(ui, "createImage",        func_idx_sys_ui_create_image);
+    BIND_FN(ui, "setImageSrc",        func_idx_sys_ui_set_image_src);
     BIND_FN(ui, "setStyle",           func_idx_sys_ui_set_style);
     BIND_FN(ui, "attachRootListener", func_idx_sys_ui_attach_root_listener);
     BIND_FN(ui, "destroy",            func_idx_sys_ui_destroy);

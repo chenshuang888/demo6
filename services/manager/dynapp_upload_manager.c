@@ -85,7 +85,11 @@ static uint32_t crc32_update(uint32_t crc, const uint8_t *buf, size_t len)
     return ~crc;
 }
 
-/* "alarm/main.js" → app_id="alarm", filename="main.js"。失败返回 false。 */
+/* "alarm/main.js"           → app_id="alarm",   filename="main.js"
+ * "alarm/assets/icon.bin"   → app_id="alarm",   filename="assets/icon.bin"
+ *
+ * 只在第一个 '/' 处拆 app_id；剩余部分原样作为 filename，
+ * 由 dynapp_script_store.filename_is_valid 决定是否合法（接受平铺名或 "assets/<base>"）。 */
 static bool split_path(const char *s,
                         char *app_id, size_t aid_cap,
                         char *filename, size_t fn_cap)
@@ -97,7 +101,6 @@ static bool split_path(const char *s,
     size_t fn_len  = strlen(slash + 1);
     if (aid_len == 0 || aid_len >= aid_cap) return false;
     if (fn_len == 0  || fn_len  >= fn_cap)  return false;
-    if (strchr(slash + 1, '/')) return false;   /* 多斜杠拒绝 */
     memcpy(app_id, s, aid_len); app_id[aid_len] = '\0';
     memcpy(filename, slash + 1, fn_len); filename[fn_len] = '\0';
     return true;

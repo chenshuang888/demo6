@@ -179,6 +179,44 @@ bool dynamic_app_ui_enqueue_create_button(const char *id, size_t id_len,
     return enqueue_create(DYNAMIC_APP_UI_CMD_CREATE_BUTTON, id, id_len, parent_id, parent_len);
 }
 
+bool dynamic_app_ui_enqueue_create_image(const char *id, size_t id_len,
+                                         const char *parent_id, size_t parent_len,
+                                         const char *src, size_t src_len)
+{
+    if (!s_ui_queue || !id) return false;
+    if (s_root == NULL) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CREATE_IMAGE;
+    utf8_copy_trunc(cmd.id,                       sizeof(cmd.id),
+                    id,        id_len);
+    utf8_copy_trunc(cmd.u.image_create.parent_id, sizeof(cmd.u.image_create.parent_id),
+                    parent_id, parent_len);
+    if (src && src_len > 0) {
+        utf8_copy_trunc(cmd.u.image_create.src, sizeof(cmd.u.image_create.src),
+                        src, src_len);
+    }
+
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_set_image_src(const char *id, size_t id_len,
+                                          const char *src, size_t src_len)
+{
+    if (!s_ui_queue || !id) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_SET_IMAGE_SRC;
+    utf8_copy_trunc(cmd.id,    sizeof(cmd.id),    id,  id_len);
+    if (src && src_len > 0) {
+        utf8_copy_trunc(cmd.u.src, sizeof(cmd.u.src), src, src_len);
+    }
+
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
 bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
                                       dynamic_app_style_key_t key,
                                       int32_t a, int32_t b, int32_t c, int32_t d)
@@ -343,8 +381,12 @@ void dynamic_app_ui_clear_event_queue(void)
  *     DESTROY              → 查 registry → lv_obj_del + slot.used=false
  * ========================================================================= */
 
-/* 创建 LVGL 对象并入 registry。返回 0 = 成功。 */
-static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
+/* 创建 LVGL 对象并入 registry。返回 0 = 成功。
+ * parent_id: 来自 union 不同字段（CREATE_LABEL/PANEL/BUTTON 用 cmd->u.parent_id，
+ *            CREATE_IMAGE 用 cmd->u.image_create.parent_id），由调用方传入。
+ * IMAGE 类型只创建空对象；src 由 drain 在 CREATE_IMAGE 分支随后调 do_set_image_src 填。 */
+static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type,
+                     const char *parent_id)
 {
     lv_obj_t *root = (lv_obj_t *)s_root;
     if (!root || !lv_obj_is_valid(root)) {
@@ -362,7 +404,7 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
         s_registry[slot].used = false;
     }
 
-    lv_obj_t *parent = resolve_parent(cmd->u.parent_id);
+    lv_obj_t *parent = resolve_parent(parent_id);
     if (!parent || !lv_obj_is_valid(parent)) {
         ESP_LOGW(TAG, "parent invalid, drop create id=%s", cmd->id);
         return -2;
@@ -400,6 +442,12 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
             lv_obj_set_style_bg_opa  (obj, LV_OPA_30,              LV_STATE_PRESSED);
             break;
         }
+        case UI_OBJ_IMAGE: {
+            obj = lv_image_create(parent);
+            /* src 由 drain 在 CREATE_IMAGE 之后通过 do_set_image_src 填，
+             * 这里不直接处理路径拼接，保持 do_create 与 src 解耦。 */
+            break;
+        }
     }
 
     if (!obj) return -3;
@@ -423,6 +471,32 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type)
     return 0;
 }
 
+/* 把脚本传入的 src（如 "fish.bin"）拼成 LVGL FS 绝对路径
+ *   "A:/littlefs/apps/<current_app>/assets/<src>"
+ * 并调 lv_image_set_src。由 dynamic_app_registry_current() 拿当前 app id。
+ *
+ * src 为空 / 当前 app 不可用 → 调 lv_image_set_src(obj, NULL) 清掉源。 */
+static void do_set_image_src(lv_obj_t *obj, const char *src)
+{
+    extern const char *dynamic_app_registry_current(void);
+    const char *app = dynamic_app_registry_current();
+    if (!obj || !lv_obj_is_valid(obj)) return;
+    if (!src || !src[0] || !app || !app[0]) {
+        lv_image_set_src(obj, NULL);
+        return;
+    }
+    /* 路径长度上限：A:/littlefs/apps/<id>/assets/<src>
+     * 7+9+5+15+1+7+32 ≈ 76，给 96 足够。 */
+    static char path[96];
+    int n = snprintf(path, sizeof(path),
+                     "A:/littlefs/apps/%s/assets/%s", app, src);
+    if (n <= 0 || n >= (int)sizeof(path)) {
+        ESP_LOGW(TAG, "image src path too long: app=%s src=%s", app, src);
+        return;
+    }
+    lv_image_set_src(obj, path);
+}
+
 void dynamic_app_ui_drain(int max_count)
 {
     if (!s_ui_queue || max_count <= 0) return;
@@ -435,16 +509,46 @@ void dynamic_app_ui_drain(int max_count)
 
         switch (cmd.type) {
             case DYNAMIC_APP_UI_CMD_CREATE_LABEL:
-                (void)do_create(&cmd, UI_OBJ_LABEL);
+                (void)do_create(&cmd, UI_OBJ_LABEL, cmd.u.parent_id);
                 break;
 
             case DYNAMIC_APP_UI_CMD_CREATE_PANEL:
-                (void)do_create(&cmd, UI_OBJ_PANEL);
+                (void)do_create(&cmd, UI_OBJ_PANEL, cmd.u.parent_id);
                 break;
 
             case DYNAMIC_APP_UI_CMD_CREATE_BUTTON:
-                (void)do_create(&cmd, UI_OBJ_BUTTON);
+                (void)do_create(&cmd, UI_OBJ_BUTTON, cmd.u.parent_id);
                 break;
+
+            case DYNAMIC_APP_UI_CMD_CREATE_IMAGE: {
+                int rc = do_create(&cmd, UI_OBJ_IMAGE, cmd.u.image_create.parent_id);
+                if (rc != 0) break;
+                /* 创建成功后立即填 src（如果 enqueue 时附带了的话） */
+                if (cmd.u.image_create.src[0]) {
+                    int slot = registry_find(cmd.id);
+                    if (slot >= 0) {
+                        do_set_image_src(s_registry[slot].obj,
+                                         cmd.u.image_create.src);
+                    }
+                }
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_SET_IMAGE_SRC: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0) break;
+                lv_obj_t *obj = s_registry[slot].obj;
+                if (!obj || !lv_obj_is_valid(obj)) {
+                    s_registry[slot].obj = NULL;
+                    break;
+                }
+                if (s_registry[slot].type != UI_OBJ_IMAGE) {
+                    ESP_LOGW(TAG, "setImageSrc on non-image id=%s", cmd.id);
+                    break;
+                }
+                do_set_image_src(obj, cmd.u.src);
+                break;
+            }
 
             case DYNAMIC_APP_UI_CMD_SET_TEXT: {
                 int slot = registry_find(cmd.id);

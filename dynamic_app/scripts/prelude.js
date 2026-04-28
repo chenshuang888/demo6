@@ -126,6 +126,8 @@ var VDOM = (function () {
         if (node.type === 'panel')       sys.ui.createPanel(id, parentId || null);
         else if (node.type === 'button') sys.ui.createButton(id, parentId || null);
         else if (node.type === 'label')  sys.ui.createLabel(id, parentId || null);
+        else if (node.type === 'image')  sys.ui.createImage(id, parentId || null,
+                                                            node.props.src || null);
         else { sys.log("VDOM: unknown type " + node.type); return node; }
 
         if (node.props.text !== undefined) sys.ui.setText(id, "" + node.props.text);
@@ -151,6 +153,7 @@ var VDOM = (function () {
             node.props[k] = patch[k];
         }
         if (patch.text !== undefined) sys.ui.setText(id, "" + patch.text);
+        if (patch.src  !== undefined) sys.ui.setImageSrc(id, patch.src || null);
         applyStyle(id, patch);
     }
 
@@ -193,6 +196,9 @@ var VDOM = (function () {
 
         if (newP.text !== undefined && newP.text !== oldP.text) {
             sys.ui.setText(id, "" + newP.text);
+        }
+        if (newP.src !== undefined && newP.src !== oldP.src) {
+            sys.ui.setImageSrc(id, newP.src || null);
         }
         for (var i = 0; i < STYLE_KEYS.length; i++) {
             var k = STYLE_KEYS[i];

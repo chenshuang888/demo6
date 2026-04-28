@@ -35,7 +35,8 @@
       "Bash(git *)",
       "Bash(grep -n \"JS_NewCFunction\\\\|sys\\\\\\\\.\\\\\\\\|fs\\\\\\\\.\\\\\\\\|\\\\\"fs\\\\\"\\\\|\\\\\"app\\\\\"\\\\|\\\\\"ui\\\\\"\\\\|\\\\\"ble\\\\\"\\\\|\\\\\"log\\\\\"\\\\|\\\\\"font\\\\\"\\\\|\\\\\"style\\\\\"\\\\|\\\\\"align\\\\\"\" C:/Users/ChenShuang/Desktop/esp32/demo6/dynamic_app/dynamic_app_natives.c)",
       "Bash(grep -n \"setInterval\\\\|clearInterval\\\\|sys\\\\\\\\.app\\\\\\\\.\\\\\\\\|saveState\\\\|loadState\\\\|eraseState\" C:/Users/ChenShuang/Desktop/esp32/demo6/dynamic_app/dynamic_app_natives.c)",
-      "Bash(grep -rn \"main\\\\\\\\.js\\\\|manifest\\\\\\\\.json\\\\|writer_open\\\\|filename\" C:/Users/ChenShuang/Desktop/esp32/demo6/tools/*.py)"
+      "Bash(grep -rn \"main\\\\\\\\.js\\\\|manifest\\\\\\\\.json\\\\|writer_open\\\\|filename\" C:/Users/ChenShuang/Desktop/esp32/demo6/tools/*.py)",
+      "Bash(grep -n \"func_idx_sys_ui_create_button\\\\|func_idx_sys_ui_create_label\\\\|func_idx_sys_ui\\\\b\\\\|s_rt\\\\\\\\.func_idx\\\\|MAX_INTERVALS\" C:/Users/ChenShuang/Desktop/esp32/demo6/dynamic_app/dynamic_app_natives.c C:/Users/ChenShuang/Desktop/esp32/demo6/dynamic_app/dynamic_app_internal.h C:/Users/ChenShuang/Desktop/esp32/demo6/dynamic_app/dynamic_app_runtime.c)"
     ]
   }
 }

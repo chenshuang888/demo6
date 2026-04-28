@@ -35,12 +35,20 @@ extern "C" {
 #define DYNAMIC_APP_UI_REGISTRY_MAX   256
 #define DYNAMIC_APP_UI_EVENT_QUEUE_LEN 8
 
+/* 图片资源相对路径上限：相对当前 app 的 assets/ 目录的文件名（如 "fish.bin"）。
+ * 31 与 DYNAPP_USER_DATA_MAX_PATH 对齐；C 端会拼成
+ *   "A:/littlefs/apps/<id>/assets/<src>"
+ * 后传给 lv_image_set_src()。 */
+#define DYNAMIC_APP_UI_SRC_MAX_LEN    32
+
 typedef enum {
     DYNAMIC_APP_UI_CMD_SET_TEXT = 1,
     DYNAMIC_APP_UI_CMD_CREATE_LABEL,
     DYNAMIC_APP_UI_CMD_CREATE_PANEL,
     DYNAMIC_APP_UI_CMD_CREATE_BUTTON,
+    DYNAMIC_APP_UI_CMD_CREATE_IMAGE,
     DYNAMIC_APP_UI_CMD_SET_STYLE,
+    DYNAMIC_APP_UI_CMD_SET_IMAGE_SRC,
     DYNAMIC_APP_UI_CMD_ATTACH_ROOT_LISTENER,   /* 在 root 上挂一个总 cb */
     DYNAMIC_APP_UI_CMD_DESTROY,                /* 删除单个 obj 并释放 registry slot */
 } dynamic_app_ui_cmd_type_t;
@@ -69,7 +77,12 @@ typedef struct {
     char id[DYNAMIC_APP_UI_ID_MAX_LEN];
     union {
         char text[DYNAMIC_APP_UI_TEXT_MAX_LEN];          /* SET_TEXT */
-        char parent_id[DYNAMIC_APP_UI_ID_MAX_LEN];        /* CREATE_* */
+        char parent_id[DYNAMIC_APP_UI_ID_MAX_LEN];        /* CREATE_LABEL/PANEL/BUTTON */
+        struct {
+            char parent_id[DYNAMIC_APP_UI_ID_MAX_LEN];
+            char src[DYNAMIC_APP_UI_SRC_MAX_LEN];
+        } image_create;                                   /* CREATE_IMAGE */
+        char src[DYNAMIC_APP_UI_SRC_MAX_LEN];             /* SET_IMAGE_SRC */
         struct {
             int32_t key;
             int32_t a, b, c, d;
@@ -121,6 +134,16 @@ bool dynamic_app_ui_enqueue_create_panel(const char *id, size_t id_len,
                                          const char *parent_id, size_t parent_len);
 bool dynamic_app_ui_enqueue_create_button(const char *id, size_t id_len,
                                           const char *parent_id, size_t parent_len);
+
+/* 创建图片节点：src 是相对当前 app 的 assets/ 子目录的文件名（如 "fish.bin"）。
+ * src 为 NULL/空 → 创建空 image，后续靠 setImageSrc 填。 */
+bool dynamic_app_ui_enqueue_create_image(const char *id, size_t id_len,
+                                         const char *parent_id, size_t parent_len,
+                                         const char *src, size_t src_len);
+
+/* 切换已有 image 节点的资源；src 同 createImage 语义。 */
+bool dynamic_app_ui_enqueue_set_image_src(const char *id, size_t id_len,
+                                          const char *src, size_t src_len);
 
 bool dynamic_app_ui_enqueue_set_style(const char *id, size_t id_len,
                                       dynamic_app_style_key_t key,

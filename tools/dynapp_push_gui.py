@@ -211,6 +211,7 @@ class UploadView(ctk.CTkFrame):
         self._log = log
 
         self._file_path: Optional[str] = None
+        self._folder_path: Optional[str] = None  # 选目录模式（含 main.js + assets/）
         self._build()
         self.set_enabled(False)
 
@@ -230,7 +231,12 @@ class UploadView(ctk.CTkFrame):
                                          fg_color=COLOR_PANEL_HI,
                                          hover_color=COLOR_ACCENT,
                                          command=self._on_browse)
-        self._browse_btn.grid(row=0, column=2, padx=(4, 14), pady=10)
+        self._browse_btn.grid(row=0, column=2, padx=(4, 4), pady=10)
+        self._folder_btn = ctk.CTkButton(row1, text="Folder...", width=110,
+                                         fg_color=COLOR_PANEL_HI,
+                                         hover_color=COLOR_ACCENT,
+                                         command=self._on_browse_folder)
+        self._folder_btn.grid(row=0, column=3, padx=(0, 14), pady=10)
 
         # —— 名称 + 元信息 ——
         row2 = ctk.CTkFrame(self, fg_color=COLOR_PANEL, corner_radius=10)
@@ -293,6 +299,7 @@ class UploadView(ctk.CTkFrame):
         if not path:
             return
         self._file_path = path
+        self._folder_path = None   # 切回单文件模式
         self._file_lbl.configure(text=os.path.basename(path))
 
         # 自动从文件名推断 app_id（去掉 .js 后缀）
@@ -311,12 +318,53 @@ class UploadView(ctk.CTkFrame):
             self._meta_lbl.configure(text=f"size error: {e}",
                                      text_color=COLOR_ERR)
 
+    def _on_browse_folder(self) -> None:
+        """选一个 app pack 目录：必须包含 main.js，可选 assets/*.bin / manifest.json。
+        相比单文件 Browse：app_id 来自目录名，size 字段汇总所有文件。"""
+        path = filedialog.askdirectory(title="Select dynamic app pack directory")
+        if not path:
+            return
+        main_js = os.path.join(path, "main.js")
+        if not os.path.isfile(main_js):
+            self._set_progress_text("dir missing main.js", COLOR_ERR)
+            return
+
+        self._folder_path = path
+        self._file_path = None    # 切回目录模式
+        guess = os.path.basename(os.path.normpath(path))
+        # 容忍习惯性后缀：imgdemo_pkg → imgdemo（也可由用户在输入框里改）
+        for suf in ("_pkg", "-pkg", ".pkg"):
+            if guess.endswith(suf):
+                guess = guess[:-len(suf)]
+                break
+        guess = guess[:NAME_LEN]
+
+        # 汇总：main.js 大小 + assets/*.bin 数量与字节
+        total = os.path.getsize(main_js)
+        asset_count = 0
+        assets_dir = os.path.join(path, "assets")
+        if os.path.isdir(assets_dir):
+            for nm in os.listdir(assets_dir):
+                fp = os.path.join(assets_dir, nm)
+                if os.path.isfile(fp):
+                    total += os.path.getsize(fp)
+                    asset_count += 1
+
+        self._file_lbl.configure(
+            text=f"{guess}/  (main.js + {asset_count} asset(s))")
+        self._name_entry.delete(0, "end")
+        self._name_entry.insert(0, guess)
+        self._display_entry.delete(0, "end")
+        self._display_entry.insert(0, guess)
+        self._meta_lbl.configure(text=f"{total:,} bytes total",
+                                 text_color=COLOR_TEXT)
+
     def _on_upload(self) -> None:
         if self._state.client is None:
             self._set_progress_text("not connected", COLOR_ERR)
             return
-        if not self._file_path:
-            self._set_progress_text("no file selected", COLOR_ERR)
+        if not self._file_path and not self._folder_path:
+            self._set_progress_text("no file/folder selected", COLOR_ERR)
             return
         app_id = self._name_entry.get().strip()
         if not app_id:
@@ -324,22 +372,43 @@ class UploadView(ctk.CTkFrame):
             return
         display = self._display_entry.get().strip() or app_id
 
-        path = self._file_path
         client = self._state.client
         self._upload_btn.configure(state="disabled")
         self._progress.set(0)
-        self._set_progress_text("uploading...", COLOR_WARN)
-        self._log("upload", f"start {app_id} ({path})")
 
         def on_progress(sent: int, total: int) -> None:
             self.after(0, self._update_progress, sent, total)
 
-        async def coro() -> None:
-            await client.upload_app(app_id, path,
-                                    display_name=display,
-                                    on_progress=on_progress)
+        if self._folder_path:
+            pack = self._folder_path
+            self._set_progress_text("uploading pack...", COLOR_WARN)
+            self._log("upload", f"start pack {app_id} ({pack})")
 
-        fut = self._bridge.submit(coro())
+            def on_step(name: str, idx: int, total: int) -> None:
+                self.after(0, self._set_progress_text,
+                           f"[{idx}/{total}] {name}", COLOR_MUTED)
+                # 步级进度（按文件数粗粒度）
+                self.after(0, self._progress.set, (idx - 1) / total)
+
+            async def coro_pack() -> None:
+                await client.upload_app_pack(app_id, pack,
+                                              display_name=display,
+                                              on_step=on_step,
+                                              on_progress=on_progress)
+
+            fut = self._bridge.submit(coro_pack())
+        else:
+            path = self._file_path
+            self._set_progress_text("uploading...", COLOR_WARN)
+            self._log("upload", f"start {app_id} ({path})")
+
+            async def coro_single() -> None:
+                await client.upload_app(app_id, path,
+                                        display_name=display,
+                                        on_progress=on_progress)
+
+            fut = self._bridge.submit(coro_single())
+
         fut.add_done_callback(lambda f: self.after(0, self._on_upload_done, f, app_id))
 
     def _update_progress(self, sent: int, total: int) -> None:

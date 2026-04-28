@@ -20,6 +20,12 @@ CONFIG_LV_TINY_TTF_CACHE_KERNING_CNT=0
 # 小分配 (<16KB) 走内部 RAM，大分配自动落到 PSRAM
 CONFIG_LV_USE_CLIB_MALLOC=y
 
+# LVGL FS Driver: 借道 esp_littlefs 的 VFS，让 lv_image 能用 "A:/littlefs/..." 加载 .bin
+# LETTER=65 = 'A'；PATH 留空 = 直接拼绝对 POSIX 路径
+CONFIG_LV_USE_FS_STDIO=y
+CONFIG_LV_FS_STDIO_LETTER=65
+CONFIG_LV_FS_STDIO_PATH=""
+
 # FreeRTOS Configuration
 CONFIG_FREERTOS_HZ=1000
 

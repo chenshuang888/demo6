@@ -62,14 +62,31 @@ static bool filename_is_valid(const char *fn)
     size_t n = strlen(fn);
     if (n > DYNAPP_SCRIPT_STORE_MAX_FNAME) return false;
     if (fn[0] == '.') return false;  /* 不允许隐藏文件 / .. */
-    for (size_t i = 0; i < n; i++) {
-        char c = fn[i];
+
+    /* 允许唯一一种子目录：assets/<base>。其它任何 '/' 都拒绝，
+     * 避免穿越或与 data/ 沙箱混用。 */
+    static const char ASSETS_PREFIX[] = "assets/";
+    const size_t APREF_LEN = sizeof(ASSETS_PREFIX) - 1;
+    const char *base = fn;
+    if (n > APREF_LEN && memcmp(fn, ASSETS_PREFIX, APREF_LEN) == 0) {
+        base = fn + APREF_LEN;
+        if (*base == '\0' || *base == '.') return false;
+    }
+    /* base 段（无论是否带 assets/ 前缀）都走原字符集 */
+    for (const char *p = base; *p; p++) {
+        char c = *p;
         bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
                || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
         if (!ok) return false;
     }
-    /* 防双点连写规避：".." 已被首字符过滤；"a..b" 是合法 filename */
     return true;
+}
+
+/* 是否是 assets/ 子目录下的文件 */
+static bool filename_is_asset(const char *fn)
+{
+    static const char ASSETS_PREFIX[] = "assets/";
+    return strncmp(fn, ASSETS_PREFIX, sizeof(ASSETS_PREFIX) - 1) == 0;
 }
 
 static bool user_relpath_is_valid(const char *rp)
@@ -139,6 +156,17 @@ static esp_err_t ensure_data_dir(const char *app_id)
     return ensure_dir(dir);
 }
 
+static esp_err_t ensure_assets_dir(const char *app_id)
+{
+    char parent[PATH_BUFSZ];
+    build_app_dir(parent, sizeof(parent), app_id);
+    esp_err_t e = ensure_dir(parent);
+    if (e != ESP_OK) return e;
+    char dir[PATH_BUFSZ];
+    snprintf(dir, sizeof(dir), "%s/%s/assets", APPS_DIR, app_id);
+    return ensure_dir(dir);
+}
+
 /* ============================================================================
  * §3. init —— 清理孤儿 .tmp
  *
@@ -161,6 +189,22 @@ static void clean_stale_tmps(const char *dir)
     }
     closedir(d);
     if (cleaned > 0) ESP_LOGW(TAG, "cleaned %d stale .tmp under %s", cleaned, dir);
+
+    /* 也扫 assets/ 子目录里的孤儿 .tmp（asset 上传中途断电会留下） */
+    char assets[PATH_BUFSZ];
+    if (snprintf(assets, sizeof(assets), "%s/assets", dir) >= (int)sizeof(assets)) return;
+    DIR *ad = opendir(assets);
+    if (!ad) return;
+    int acleaned = 0;
+    while ((ent = readdir(ad)) != NULL) {
+        size_t fl = strlen(ent->d_name);
+        if (fl <= 4 || strcmp(ent->d_name + fl - 4, ".tmp") != 0) continue;
+        char p[PATH_BUFSZ];
+        if (snprintf(p, sizeof(p), "%s/%s", assets, ent->d_name) >= (int)sizeof(p)) continue;
+        if (unlink(p) == 0) acleaned++;
+    }
+    closedir(ad);
+    if (acleaned > 0) ESP_LOGW(TAG, "cleaned %d stale .tmp under %s", acleaned, assets);
 }
 
 esp_err_t dynapp_script_store_init(void)
@@ -275,7 +319,9 @@ esp_err_t dynapp_app_file_write(const char *app_id, const char *filename,
     if (len == 0 || len > DYNAPP_SCRIPT_STORE_MAX_BYTES)
         return ESP_ERR_INVALID_SIZE;
 
-    esp_err_t e = ensure_app_dir(app_id);
+    esp_err_t e = filename_is_asset(filename)
+                  ? ensure_assets_dir(app_id)
+                  : ensure_app_dir(app_id);
     if (e != ESP_OK) return e;
 
     char tmp_path[PATH_BUFSZ], final_path[PATH_BUFSZ];
@@ -557,7 +603,10 @@ dynapp_script_writer_t *dynapp_script_store_open_writer(const char *app_id,
         dynapp_script_writer_abort(s_active_writer);
     }
 
-    if (ensure_app_dir(app_id) != ESP_OK) return NULL;
+    esp_err_t mke = filename_is_asset(filename)
+                    ? ensure_assets_dir(app_id)
+                    : ensure_app_dir(app_id);
+    if (mke != ESP_OK) return NULL;
 
     dynapp_script_writer_t *w = (dynapp_script_writer_t *)calloc(1, sizeof(*w));
     if (!w) return NULL;

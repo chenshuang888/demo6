@@ -205,6 +205,85 @@ class UploaderClient:
         await self.upload_bytes(f"{app_id}/manifest.json", manifest_bytes)
         await self.upload_file(f"{app_id}/main.js", main_js_path, on_progress=on_progress)
 
+    async def upload_app_pack(
+        self,
+        app_id: str,
+        pack_dir: str,
+        *,
+        display_name: Optional[str] = None,
+        on_step: Optional[Callable[[str, int, int], None]] = None,
+        on_progress: Optional[ProgressCb] = None,
+    ) -> None:
+        """上传"目录形式"的 app pack。期望布局：
+
+            <pack_dir>/
+                main.js          (必需)
+                manifest.json    (可选；缺省自动生成)
+                assets/          (可选)
+                    <name>.bin
+                    ...
+
+        on_step(filename, idx, total)：每个文件开始上传时回调。
+        on_progress：传入每个文件的字节进度（仅 main.js 与 ≥4KB 的 asset 调）。
+        """
+        import json
+
+        main_js = os.path.join(pack_dir, "main.js")
+        if not os.path.isfile(main_js):
+            raise UploadError(f"main.js missing under {pack_dir}")
+
+        manifest_local = os.path.join(pack_dir, "manifest.json")
+        if os.path.isfile(manifest_local):
+            with open(manifest_local, "rb") as f:
+                manifest_bytes = f.read()
+        else:
+            mf = {"id": app_id, "name": display_name or app_id, "version": "1.0.0"}
+            manifest_bytes = json.dumps(mf, ensure_ascii=False).encode("utf-8")
+
+        # 收集 assets/*.bin（仅一层；按字典序稳定）
+        assets_dir = os.path.join(pack_dir, "assets")
+        asset_files: list[str] = []
+        if os.path.isdir(assets_dir):
+            for nm in sorted(os.listdir(assets_dir)):
+                fp = os.path.join(assets_dir, nm)
+                if not os.path.isfile(fp):
+                    continue
+                # 校验文件名：合规字符 + 长度。最终上传 path 是
+                #   "<app_id>/assets/<nm>"
+                # 受 PATH_LEN=31 约束，所以 nm 必须 ≤ 31 - len(app_id) - 8
+                budget = PATH_LEN - len(app_id.encode("ascii")) - len("/assets/")
+                if len(nm.encode("ascii")) > budget:
+                    raise UploadError(
+                        f"asset path too long: '<app_id>/assets/{nm}' exceeds "
+                        f"{PATH_LEN} chars (budget={budget})")
+                # 字符集与 ESP 端 filename_is_valid 一致：[a-zA-Z0-9_.-]，首字符非 '.'
+                if nm.startswith(".") or any(
+                    not (c.isalnum() or c in "_-.") for c in nm
+                ):
+                    raise UploadError(f"asset filename has illegal char: {nm}")
+                asset_files.append(nm)
+
+        total_steps = 1 + 1 + len(asset_files)   # manifest + main + N assets
+        step = 0
+
+        # 1. manifest.json
+        step += 1
+        if on_step: on_step("manifest.json", step, total_steps)
+        await self.upload_bytes(f"{app_id}/manifest.json", manifest_bytes)
+
+        # 2. main.js
+        step += 1
+        if on_step: on_step("main.js", step, total_steps)
+        await self.upload_file(f"{app_id}/main.js", main_js, on_progress=on_progress)
+
+        # 3. assets/<name>
+        for nm in asset_files:
+            step += 1
+            if on_step: on_step(f"assets/{nm}", step, total_steps)
+            local_fp = os.path.join(assets_dir, nm)
+            cb = on_progress if os.path.getsize(local_fp) >= 4096 else None
+            await self.upload_file(f"{app_id}/assets/{nm}", local_fp, on_progress=cb)
+
     async def list_apps(self) -> list[str]:
         st = await self._send_and_wait(pack_list(self._next_seq()))
         self._raise_if_bad(st, "LIST")
