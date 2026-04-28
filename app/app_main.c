@@ -20,11 +20,24 @@
 #include "backlight_storage.h"
 #include "time_storage.h"
 #include "dynamic_app.h"
+#include "dynamic_app_registry.h"
+#include "dynapp_upload_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include <string.h>
 
 static const char *TAG = "app_main";
+
+/* 运行中检测 hook：upload manager 在删脚本前调一次。
+ * 跑在 manager consumer task，仅读取 dynamic_app_registry 静态字段，安全。
+ * page_router_get_current 也是纯读，不动 LVGL。 */
+static bool is_app_running(const char *name)
+{
+    if (page_router_get_current() != PAGE_DYNAMIC_APP) return false;
+    const char *running = dynamic_app_registry_current();
+    return running && running[0] && strcmp(running, name) == 0;
+}
 
 static void ui_task(void *arg)
 {
@@ -90,6 +103,10 @@ esp_err_t app_main_init(void)
     ESP_ERROR_CHECK(page_router_register(PAGE_DYNAMIC_APP, page_dynamic_app_get_callbacks()));
 
     ESP_ERROR_CHECK(page_router_switch(PAGE_TIME));
+
+    /* 注入"运行中检测"hook，让 upload manager 拒绝删除当前正在跑的 app。
+     * 必须在 page_router_init 之后注册（hook 内部读 page_router_get_current）。 */
+    dynapp_upload_manager_set_running_check(is_app_running);
 
     /*
      * UI 任务固定在 Core1：

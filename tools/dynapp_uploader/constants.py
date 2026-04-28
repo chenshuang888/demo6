@@ -54,8 +54,6 @@ RESULT_NAMES = {
 # ---- 默认设备名片段 ----
 DEFAULT_DEVICE_NAME_HINT = "ESP32"
 
-# ---- 内嵌 app 名单（PC 端硬编码，跟固件 dynamic_app_registry.c 的 g_apps[] 对齐）
-# 用于 Apps 视图区分"这个 app 是固件自带还是用户推送"。 ----
-BUILTIN_APP_NAMES = frozenset({
-    "alarm", "calc", "timer", "2048", "echo", "weather", "music",
-})
+# 注：固件 registry 已改为单源（仅 FS）。除了 prelude.js（runtime 标准库）外
+# 没有任何"内嵌 app"。如果旧版 PC 工具还引用 BUILTIN_APP_NAMES，应改为只看
+# UPL_OP_LIST 的返回结果。

@@ -18,7 +18,6 @@ GUI 入口：tools/dynapp_push_gui.py
 
 from .client import UploaderClient, UploadError
 from .constants import (
-    BUILTIN_APP_NAMES,
     DEFAULT_DEVICE_NAME_HINT,
     MAX_CHUNK,
     MAX_SCRIPT_BYTES,
@@ -29,7 +28,6 @@ from .constants import (
 __all__ = [
     "UploaderClient",
     "UploadError",
-    "BUILTIN_APP_NAMES",
     "DEFAULT_DEVICE_NAME_HINT",
     "MAX_CHUNK",
     "MAX_SCRIPT_BYTES",

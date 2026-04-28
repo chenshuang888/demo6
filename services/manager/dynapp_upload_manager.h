@@ -77,6 +77,35 @@ typedef void (*upload_status_cb_t)(upload_op_t op,
 
 esp_err_t dynapp_upload_manager_init(upload_status_cb_t status_cb);
 
+/**
+ * 追加注册一个 status 回调（多消费者）。
+ *
+ * - 容量上限 DYNAPP_UPLOAD_MAX_STATUS_CBS（含 init 时注册的那一个）
+ * - 同一个函数指针重复注册：no-op，返回 ESP_OK（idempotent）
+ * - 满了 / cb==NULL：返回 ESP_ERR_NO_MEM / ESP_ERR_INVALID_ARG
+ * - 注册的 cb 与 init 时的 cb 共享线程契约（manager consumer task，禁阻塞 / 禁碰 LVGL）
+ *
+ * 典型用例：菜单页在 create 时注册一个观察者（仅 set 一个 dirty flag），
+ * 在 UI 线程的 update tick 里再做真正的列表重建。
+ */
+#define DYNAPP_UPLOAD_MAX_STATUS_CBS  4
+esp_err_t dynapp_upload_manager_register_status_cb(upload_status_cb_t cb);
+
+/**
+ * 注册"运行中检测"hook（可选）。
+ *
+ * 用途：dispatch_delete 在删脚本前调一次，若返回 true 则拒删并 notify(BUSY)。
+ * 解耦：manager 不知道 dynamic_app / page_router 这些上层概念，由上层注册。
+ *
+ * 没注册（默认）→ 不做拦截，保持原有行为（删什么走什么）。
+ * 同一函数指针重复注册 → 覆盖。
+ *
+ * cb 实现要求：必须线程安全（manager consumer task 上下文调用），
+ * 通常只读取一个原子状态字段。
+ */
+typedef bool (*upload_app_running_cb_t)(const char *app_name);
+void dynapp_upload_manager_set_running_check(upload_app_running_cb_t cb);
+
 /* ---- 提交接口（service 用，全部非阻塞）---- */
 
 bool dynapp_upload_submit_start (const char *name, uint32_t total_len, uint32_t crc32);

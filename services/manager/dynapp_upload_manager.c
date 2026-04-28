@@ -62,7 +62,9 @@ typedef struct {
 } upload_item_t;
 
 static QueueHandle_t       s_queue   = NULL;
-static upload_status_cb_t  s_cb      = NULL;
+static upload_status_cb_t  s_cbs[DYNAPP_UPLOAD_MAX_STATUS_CBS];
+static int                 s_cb_count = 0;
+static upload_app_running_cb_t s_running_check = NULL;
 static TaskHandle_t        s_task    = NULL;
 
 /* ============================================================================
@@ -150,7 +152,11 @@ bool dynapp_upload_submit_list(void)
 static void notify(upload_op_t op, upload_result_t r, const char *name, uint32_t extra,
                    const uint8_t *list_buf, size_t list_len)
 {
-    if (s_cb) s_cb(op, r, name, extra, list_buf, list_len);
+    /* 多消费者广播。s_cbs 只在 init / register 时追加写、consumer task 单线程读，
+     * 不需要互斥（即便有，FreeRTOS port 下指针 store/load 也是原子的）。 */
+    for (int i = 0; i < s_cb_count; i++) {
+        s_cbs[i](op, r, name, extra, list_buf, list_len);
+    }
 }
 
 static void session_reset(void)
@@ -277,6 +283,16 @@ static void dispatch_delete(const upload_item_t *it)
         notify(UPL_OP_DELETE, UPL_RESULT_BUSY, it->del.name, 0, NULL, 0);
         return;
     }
+    /* 也不要删"正在运行的 app"——脚本 buffer 早已 release，不会野指针，
+     * 但下次重启会失败、用户体验差。统一拦在 manager 层：PC 主动 delete
+     * 和设备菜单长按删除都走同一道防线。具体"在不在跑"由上层注入的
+     * running_check 判断（见 set_running_check 注释），manager 自身不依赖
+     * dynamic_app / page_router 组件，避免循环依赖。 */
+    if (s_running_check && s_running_check(it->del.name)) {
+        ESP_LOGW(TAG, "DELETE refused: %s is running", it->del.name);
+        notify(UPL_OP_DELETE, UPL_RESULT_BUSY, it->del.name, 0, NULL, 0);
+        return;
+    }
     esp_err_t err = dynapp_script_store_delete(it->del.name);
     upload_result_t r = (err == ESP_OK)               ? UPL_RESULT_OK
                       : (err == ESP_ERR_NOT_FOUND)    ? UPL_RESULT_OK   /* 幂等 */
@@ -329,11 +345,34 @@ static void consumer_task(void *arg)
     }
 }
 
+esp_err_t dynapp_upload_manager_register_status_cb(upload_status_cb_t cb)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < s_cb_count; i++) {
+        if (s_cbs[i] == cb) return ESP_OK;  /* idempotent */
+    }
+    if (s_cb_count >= DYNAPP_UPLOAD_MAX_STATUS_CBS) return ESP_ERR_NO_MEM;
+    s_cbs[s_cb_count++] = cb;
+    return ESP_OK;
+}
+
+void dynapp_upload_manager_set_running_check(upload_app_running_cb_t cb)
+{
+    s_running_check = cb;
+}
+
 esp_err_t dynapp_upload_manager_init(upload_status_cb_t status_cb)
 {
-    if (s_task) return ESP_OK;  /* idempotent */
+    if (s_task) {
+        /* idempotent：允许之后追加注册新 cb */
+        if (status_cb) (void)dynapp_upload_manager_register_status_cb(status_cb);
+        return ESP_OK;
+    }
 
-    s_cb = status_cb;
+    s_cb_count = 0;
+    if (status_cb) {
+        s_cbs[s_cb_count++] = status_cb;
+    }
     s_queue = xQueueCreate(UPLOAD_QUEUE_LEN, sizeof(upload_item_t));
     if (!s_queue) return ESP_ERR_NO_MEM;
 

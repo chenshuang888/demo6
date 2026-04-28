@@ -33,7 +33,6 @@ from tkinter import filedialog
 sys.path.insert(0, str(Path(__file__).parent))
 
 from dynapp_uploader import (
-    BUILTIN_APP_NAMES,
     DEFAULT_DEVICE_NAME_HINT,
     NAME_LEN,
     UploadError,
@@ -435,25 +434,18 @@ class AppsView(ctk.CTkFrame):
         for w in self._list_frame.winfo_children():
             w.destroy()
 
-        # 内嵌 + FS 合并去重展示
-        all_entries: list[tuple[str, bool]] = []
-        for n in sorted(BUILTIN_APP_NAMES):
-            all_entries.append((n, True))
-        for n in fs_names:
-            if n not in BUILTIN_APP_NAMES:
-                all_entries.append((n, False))
-
-        if not all_entries:
+        # 单源化：只渲染 FS 上存在的 app
+        if not fs_names:
             ctk.CTkLabel(self._list_frame, text="(empty)",
                          text_color=COLOR_MUTED).pack(pady=20)
             return
 
         self._selected = None
         self._row_frames: dict[str, ctk.CTkFrame] = {}
-        for name, builtin in all_entries:
-            self._add_row(name, builtin)
+        for name in sorted(fs_names):
+            self._add_row(name)
 
-    def _add_row(self, name: str, builtin: bool) -> None:
+    def _add_row(self, name: str) -> None:
         row = ctk.CTkFrame(self._list_frame, fg_color=COLOR_PANEL_HI,
                            corner_radius=6, height=44)
         row.pack(fill="x", padx=8, pady=4)
@@ -462,17 +454,13 @@ class AppsView(ctk.CTkFrame):
         ctk.CTkLabel(row, text=name, text_color=COLOR_TEXT,
                      anchor="w").grid(row=0, column=0, sticky="w",
                                        padx=14, pady=10)
-        tag = "builtin" if builtin else "FS"
-        tag_color = COLOR_MUTED if builtin else COLOR_OK
-        ctk.CTkLabel(row, text=tag, text_color=tag_color,
+        ctk.CTkLabel(row, text="FS", text_color=COLOR_OK,
                      anchor="e").grid(row=0, column=1, sticky="e",
                                        padx=14, pady=10)
 
-        # 内嵌 app 不可选（不能删）
-        if not builtin:
-            row.bind("<Button-1>", lambda _e, n=name: self._select(n))
-            for child in row.winfo_children():
-                child.bind("<Button-1>", lambda _e, n=name: self._select(n))
+        row.bind("<Button-1>", lambda _e, n=name: self._select(n))
+        for child in row.winfo_children():
+            child.bind("<Button-1>", lambda _e, n=name: self._select(n))
 
         self._row_frames[name] = row
 
@@ -485,8 +473,6 @@ class AppsView(ctk.CTkFrame):
     def _on_delete(self) -> None:
         client = self._state.client
         if client is None or not self._selected:
-            return
-        if self._selected in BUILTIN_APP_NAMES:
             return
         name = self._selected
         self._delete_btn.configure(state="disabled")

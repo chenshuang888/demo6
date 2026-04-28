@@ -5,6 +5,7 @@ idf_component_register(
         "pages/page_time.c"
         "pages/page_time_adjust.c"
         "pages/page_menu.c"
+        "pages/page_menu_modal.c"
         "pages/page_about.c"
         "pages/page_weather.c"
         "pages/page_notifications.c"
