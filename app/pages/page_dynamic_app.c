@@ -65,9 +65,12 @@ typedef struct {
 
 static page_dyn_ui_t s_ui = {0};
 
-/* 下一次 page create 时要启动的 app 名。默认 "alarm"（向后兼容）。
- * 新路径 prepare_and_switch 也会写它，再被 create()/prepare 内部读。 */
-static char s_pending_app[16] = "alarm";
+/* 下一次 page create 时要启动的 app 名。空串表示"没设置"——
+ * 若旧路径 page_router_switch(PAGE_DYNAMIC_APP) 没先调 set_pending，
+ * registry_get 会拿空串失败、屏幕空白；新路径
+ * page_dynamic_app_prepare_and_switch(name) 必定先写入这里。
+ * 单源化后内嵌 alarm 已不存在，不再保留 "alarm" 这种向后兼容默认。 */
+static char s_pending_app[16] = "";
 
 /* 前向声明 */
 static void build_screen_subtree(void);

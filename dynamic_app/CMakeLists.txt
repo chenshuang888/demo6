@@ -14,15 +14,10 @@ idf_component_register(
         "."
     EMBED_TXTFILES
         # 标准库 prelude，runtime 在每次启动 app 前自动 eval 一次
+        # 这是动态 app 系统唯一内嵌的脚本：runtime 启动不依赖 FS。
+        # 业务 app 一律走 LittleFS（storage/littlefs/dynapp_script_store），
+        # 通过 BLE 上传写入 /littlefs/apps/<name>.js。
         "scripts/prelude.js"
-        # 把脚本打包进固件，每个 app 一个独立 buffer
-        "scripts/alarm.js"
-        "scripts/calc.js"
-        "scripts/timer.js"
-        "scripts/game2048.js"
-        "scripts/echo.js"
-        "scripts/weather.js"
-        "scripts/music.js"
     REQUIRES
         freertos
         esp_timer

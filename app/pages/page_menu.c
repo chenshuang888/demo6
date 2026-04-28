@@ -235,30 +235,18 @@ static void create_top_bar(void)
     lv_obj_add_event_cb(s_ui.back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
 }
 
-/* 友好显示名映射：app name → 列表显示文字（英文，避免依赖中文字体子集）。
- * 内嵌 app 给规整名字，未知 app 直接用 raw name。 */
+/* 显示名 hook：单源化后所有动态 app 都来自 FS，没有"内嵌友好名"映射，
+ * 直接显示脚本文件名。函数空壳保留：未来若加 manifest 元数据
+ * (eg. /littlefs/apps/<name>.meta) 是天然 hook。 */
 static const char *display_name_for_app(const char *name)
 {
-    if (strcmp(name, "alarm")   == 0) return "Alarm";
-    if (strcmp(name, "calc")    == 0) return "Calculator";
-    if (strcmp(name, "timer")   == 0) return "Timer";
-    if (strcmp(name, "2048")    == 0) return "2048";
-    if (strcmp(name, "echo")    == 0) return "BLE Echo";
-    if (strcmp(name, "weather") == 0) return "Weather (dyn)";
-    if (strcmp(name, "music")   == 0) return "Music (dyn)";
     return name;
 }
 
-/* 根据 app 名挑一个图标。未知 app 用通用 list 图标。 */
+/* 图标 hook：同上。当前所有动态 app 用通用 list 图标。 */
 static const char *icon_for_app(const char *name)
 {
-    if (strcmp(name, "alarm")   == 0) return LV_SYMBOL_BELL;
-    if (strcmp(name, "calc")    == 0) return LV_SYMBOL_PLUS;
-    if (strcmp(name, "timer")   == 0) return LV_SYMBOL_LOOP;
-    if (strcmp(name, "2048")    == 0) return LV_SYMBOL_OK;
-    if (strcmp(name, "echo")    == 0) return LV_SYMBOL_BLUETOOTH;
-    if (strcmp(name, "weather") == 0) return LV_SYMBOL_IMAGE;
-    if (strcmp(name, "music")   == 0) return LV_SYMBOL_AUDIO;
+    (void)name;
     return LV_SYMBOL_LIST;
 }
 
