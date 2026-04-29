@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <sys/stat.h>
 
 /* ============================================================================
  * 配色（与时间页一致）
@@ -229,6 +230,44 @@ static lv_obj_t *create_list_item(lv_obj_t *parent,
     return item;
 }
 
+/* 给动态 app 用的"图片图标"版本：image_path 是 LVGL FS 路径
+ *   "A:/littlefs/apps/<id>/icon.bin"
+ * 约定 32×32；放不下时 LVGL 会按 image 原始尺寸渲染，不强制缩放。
+ *
+ * 与 create_list_item 的差别：
+ *   - 左侧用 lv_image 替代 SYMBOL label
+ *   - 不返回 value/arrow（动态 app 项一律不需要）
+ *   - 仅供 create_dynamic_items 内部使用 */
+static lv_obj_t *create_list_item_with_image_icon(lv_obj_t *parent,
+                                                   const char *image_path,
+                                                   const char *text,
+                                                   bool last)
+{
+    lv_obj_t *item = lv_btn_create(parent);
+    lv_obj_remove_style_all(item);
+    lv_obj_add_style(item, &s_ui.style_item, 0);
+    lv_obj_add_style(item, &s_ui.style_item_pressed, LV_STATE_PRESSED);
+    lv_obj_set_size(item, lv_pct(100), 50);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+    if (last) {
+        lv_obj_set_style_border_width(item, 0, 0);
+    }
+
+    /* 32×32 图标，与 SYMBOL 版本占位一致（label 默认中心对齐到 LEFT_MID 14,0） */
+    lv_obj_t *icon_img = lv_image_create(item);
+    lv_image_set_src(icon_img, image_path);
+    lv_obj_align(icon_img, LV_ALIGN_LEFT_MID, 6, 0);
+
+    lv_obj_t *text_lbl = lv_label_create(item);
+    lv_label_set_text(text_lbl, text);
+    lv_obj_set_style_text_color(text_lbl, lv_color_hex(COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(text_lbl, APP_FONT_TEXT, 0);
+    lv_obj_align(text_lbl, LV_ALIGN_LEFT_MID, 48, 0);
+
+    return item;
+}
+
 static void create_top_bar(void)
 {
     s_ui.back_btn = lv_btn_create(s_ui.screen);
@@ -299,11 +338,30 @@ static void create_dynamic_items(lv_obj_t *card)
             continue;
         }
 
-        lv_obj_t *item = create_list_item(card,
-            icon_for_app(entries[i].id),
-            display_name_for_app(entries[i].display),
-            /*out=*/NULL, /*val=*/NULL, /*clr=*/0,
-            /*last=*/false);
+        /* 尝试加载 app 自带图标 /littlefs/apps/<id>/icon.bin
+         *   存在 → 用 lv_image 节点（约定 32×32 RGB565）
+         *   不存在 → 回退到内置 LV_SYMBOL_LIST */
+        char fs_path[80];
+        snprintf(fs_path, sizeof(fs_path),
+                 "/littlefs/apps/%s/icon.bin", entries[i].id);
+        struct stat st;
+        bool has_icon = (stat(fs_path, &st) == 0 && S_ISREG(st.st_mode));
+
+        lv_obj_t *item;
+        if (has_icon) {
+            char lv_path[88];
+            snprintf(lv_path, sizeof(lv_path), "A:%s", fs_path);
+            item = create_list_item_with_image_icon(card,
+                lv_path,
+                display_name_for_app(entries[i].display),
+                /*last=*/false);
+        } else {
+            item = create_list_item(card,
+                icon_for_app(entries[i].id),
+                display_name_for_app(entries[i].display),
+                /*out=*/NULL, /*val=*/NULL, /*clr=*/0,
+                /*last=*/false);
+        }
 
         lv_obj_add_event_cb(item, on_dyn_clicked, LV_EVENT_CLICKED, copy);
         lv_obj_add_event_cb(item, on_dyn_long_pressed, LV_EVENT_LONG_PRESSED, copy);

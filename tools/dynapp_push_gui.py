@@ -339,8 +339,12 @@ class UploadView(ctk.CTkFrame):
                 break
         guess = guess[:NAME_LEN]
 
-        # 汇总：main.js 大小 + assets/*.bin 数量与字节
+        # 汇总：main.js 大小 + 可选 icon.bin + assets/*.bin 数量与字节
         total = os.path.getsize(main_js)
+        icon_local = os.path.join(path, "icon.bin")
+        has_icon = os.path.isfile(icon_local)
+        if has_icon:
+            total += os.path.getsize(icon_local)
         asset_count = 0
         assets_dir = os.path.join(path, "assets")
         if os.path.isdir(assets_dir):
@@ -350,8 +354,11 @@ class UploadView(ctk.CTkFrame):
                     total += os.path.getsize(fp)
                     asset_count += 1
 
+        parts = ["main.js"]
+        if has_icon: parts.append("icon")
+        if asset_count: parts.append(f"{asset_count} asset(s)")
         self._file_lbl.configure(
-            text=f"{guess}/  (main.js + {asset_count} asset(s))")
+            text=f"{guess}/  ({' + '.join(parts)})")
         self._name_entry.delete(0, "end")
         self._name_entry.insert(0, guess)
         self._display_entry.delete(0, "end")

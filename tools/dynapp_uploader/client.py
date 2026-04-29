@@ -219,6 +219,7 @@ class UploaderClient:
             <pack_dir>/
                 main.js          (必需)
                 manifest.json    (可选；缺省自动生成)
+                icon.bin         (可选；菜单图标，约定 32×32)
                 assets/          (可选)
                     <name>.bin
                     ...
@@ -239,6 +240,10 @@ class UploaderClient:
         else:
             mf = {"id": app_id, "name": display_name or app_id, "version": "1.0.0"}
             manifest_bytes = json.dumps(mf, ensure_ascii=False).encode("utf-8")
+
+        # 可选菜单图标 icon.bin（与 main.js 同级）
+        icon_local = os.path.join(pack_dir, "icon.bin")
+        has_icon = os.path.isfile(icon_local)
 
         # 收集 assets/*.bin（仅一层；按字典序稳定）
         assets_dir = os.path.join(pack_dir, "assets")
@@ -263,7 +268,7 @@ class UploaderClient:
                     raise UploadError(f"asset filename has illegal char: {nm}")
                 asset_files.append(nm)
 
-        total_steps = 1 + 1 + len(asset_files)   # manifest + main + N assets
+        total_steps = 1 + 1 + (1 if has_icon else 0) + len(asset_files)
         step = 0
 
         # 1. manifest.json
@@ -276,7 +281,13 @@ class UploaderClient:
         if on_step: on_step("main.js", step, total_steps)
         await self.upload_file(f"{app_id}/main.js", main_js, on_progress=on_progress)
 
-        # 3. assets/<name>
+        # 3. icon.bin（可选）
+        if has_icon:
+            step += 1
+            if on_step: on_step("icon.bin", step, total_steps)
+            await self.upload_file(f"{app_id}/icon.bin", icon_local)
+
+        # 4. assets/<name>
         for nm in asset_files:
             step += 1
             if on_step: on_step(f"assets/{nm}", step, total_steps)
