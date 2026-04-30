@@ -66,12 +66,16 @@ class UploaderClient:
         device_name: str = DEFAULT_DEVICE_NAME_HINT,
         address: Optional[str] = None,
         scan_timeout: float = 10.0,
+        external_client: Optional[BleakClient] = None,
     ) -> None:
+        """external_client: 外部传入已连接的 BleakClient（companion 集成模式）。
+        提供时跳过 scan/connect/disconnect 物理链路，仅 start/stop_notify。"""
         self._device_name = device_name
         self._address = address
         self._scan_timeout = scan_timeout
+        self._external = external_client is not None
 
-        self._client: Optional[BleakClient] = None
+        self._client: Optional[BleakClient] = external_client
         self._connected_addr: Optional[str] = None
 
         # seq → Future[StatusFrame]
@@ -91,7 +95,12 @@ class UploaderClient:
         await self.disconnect()
 
     async def connect(self) -> str:
-        """扫描并连接，返回 MAC。"""
+        """扫描并连接，返回 MAC。external_client 模式下仅 start_notify。"""
+        if self._external:
+            assert self._client is not None
+            await self._client.start_notify(STATUS_UUID, self._on_status)
+            self._connected_addr = getattr(self._client, "address", None) or ""
+            return self._connected_addr
         addr = self._address
         if not addr:
             logger.info("scanning for device matching %r ...", self._device_name)
@@ -120,11 +129,12 @@ class UploaderClient:
                 await self._client.stop_notify(STATUS_UUID)
             except Exception:
                 pass
-            try:
-                await self._client.disconnect()
-            except Exception:
-                pass
-            self._client = None
+            if not self._external:
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+            self._client = None if not self._external else self._client
         # 取消所有未完成的 future
         for fut in self._pending.values():
             if not fut.done():

@@ -1,6 +1,6 @@
 """dynapp_uploader —— ESP32 dynamic app 上传/运维 SDK。
 
-GUI 入口：tools/dynapp_push_gui.py
+GUI 入口：python -m companion（在 GUI 的 Upload 页操作）
 
 也可以独立用：
 
