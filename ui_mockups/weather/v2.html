@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Weather v2 — 整合 hero + 无卡片极简</title>
+<link rel="stylesheet" href="../_shared/tokens.css">
+<link rel="stylesheet" href="../_shared/frame.css">
+<style>
+  /* ============================================================================
+   * v2 思路：hero 紧凑整合 + 去卡片化（用分隔线代替）
+   *
+   * 关键改动：
+   *   1. 城市/温度/状态合并为单一 hero 块，纵向紧凑（不再三段分散）
+   *   2. 删掉两张卡片，改用分隔线分组 → 整页统一无"实-飘"断层
+   *   3. min/max 与 humidity 等信息平铺为统一的 KV row 列表
+   * ========================================================================= */
+
+  .screen { padding: var(--sp-lg) var(--sp-lg) 0; }
+
+  /* hero 区：城市 + 温度 + 状态，紧凑居中 */
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: var(--sp-md);
+    padding-bottom: var(--sp-lg);
+  }
+  .hero .city {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+    margin-bottom: var(--sp-sm);
+  }
+  .hero .temp {
+    color: var(--text);
+    font-size: var(--f-huge);
+    line-height: 1;
+    font-weight: 400;
+  }
+  .hero .status {
+    color: var(--w-clear);
+    font-size: var(--f-title);
+    margin-top: var(--sp-sm);
+  }
+
+  /* 数据 row：iOS Settings 风的 KV 列表 */
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-md) 0;
+    border-top: 1px solid rgba(198, 198, 200, 0.5);
+  }
+  .row:last-child {
+    border-bottom: 1px solid rgba(198, 198, 200, 0.5);
+  }
+  .row .key {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .row .value {
+    color: var(--text);
+    font-size: var(--f-body);
+  }
+
+  /* H/L 行：两个值横排 */
+  .hl-row .value {
+    display: flex;
+    gap: var(--sp-md);
+  }
+  .hl-row .value .h { color: var(--text); }
+  .hl-row .value .l { color: var(--text-muted); }
+  .hl-row .value .sep { color: var(--border); }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="meta">v2 · 无卡片极简 · 整合 hero · 240×320</div>
+  <div class="screen">
+    <div class="hero">
+      <div class="city">Los Angeles</div>
+      <div class="temp">14.3°</div>
+      <div class="status">Clear</div>
+    </div>
+
+    <div class="row hl-row">
+      <span class="key">高 / 低</span>
+      <span class="value">
+        <span class="h">22°</span>
+        <span class="sep">/</span>
+        <span class="l">8°</span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="key">湿度</span>
+      <span class="value">45%</span>
+    </div>
+    <div class="row">
+      <span class="key">更新</span>
+      <span class="value">14:32</span>
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button id="btn-grid">Toggle 8px Grid</button>
+</div>
+
+<script>
+  document.getElementById('btn-grid').onclick = function() {
+    document.body.classList.toggle('show-grid');
+    this.classList.toggle('on');
+  };
+</script>
+
+</body>
+</html>

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Weather v5 — v4 hero + v1 双卡布局</title>
+<link rel="stylesheet" href="../_shared/tokens.css">
+<link rel="stylesheet" href="../_shared/frame.css">
+<style>
+  /* ============================================================================
+   * v5 思路：上半采用 v4 的"左大图标 + 右温度"，下半保留 v1 的双卡布局
+   *
+   *  - hero (左图右数)：来自 v4
+   *  - minmax 卡 (LOW | HIGH)：来自 v1
+   *  - info 卡 (Humidity / Updated)：来自 v1
+   * ========================================================================= */
+
+  .screen {
+    padding-top: var(--sp-md);
+  }
+
+  /* 顶部城市标签（居中弱化） */
+  .city {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+    text-align: center;
+    margin-bottom: var(--sp-sm);
+  }
+
+  /* hero 横排 */
+  .hero {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-lg);
+    margin-bottom: var(--sp-lg);
+  }
+  .hero .icon {
+    width: 80px;
+    height: 80px;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+  .hero .info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .hero .temp {
+    color: var(--text);
+    font-size: var(--f-huge);
+    line-height: 1;
+    font-weight: 400;
+  }
+  .hero .status {
+    color: var(--w-clear);
+    font-size: var(--f-title);
+    margin-top: var(--sp-xs);
+  }
+
+  /* ---- 下半：v1 风格双卡片（原 LVGL 实现复刻）---- */
+
+  .card {
+    margin: 0 auto var(--sp-sm);
+    width: 220px;
+    background: var(--panel);
+    border: 1px solid rgba(198, 198, 200, 0.5);
+    border-radius: var(--r-lg);
+    padding: var(--sp-md);
+  }
+
+  /* min/max 卡：横排三列 LOW | sep | HIGH */
+  .minmax-card {
+    height: 50px;
+    padding: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+  }
+  .minmax-card .col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .minmax-card .hint {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .minmax-card .val {
+    color: var(--text);
+    font-size: var(--f-title);
+  }
+  .minmax-card .sep {
+    width: 1px;
+    height: 28px;
+    background: rgba(198, 198, 200, 0.7);
+  }
+
+  /* info 卡：纵向 KV row */
+  .info-card {
+    height: 80px;
+    display: flex;
+    flex-direction: column;
+  }
+  .kv-row {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(198, 198, 200, 0.4);
+  }
+  .kv-row:last-child { border-bottom: none; }
+  .kv-key {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .kv-value {
+    color: var(--text);
+    font-size: var(--f-body);
+  }
+</style>
+</head>
+<body>
+
+<div class="stages-row">
+
+  <!-- 晴天 -->
+  <div class="stage">
+    <div class="meta">v5 · clear · 240×320</div>
+    <div class="screen">
+      <div class="city">Los Angeles</div>
+      <div class="hero">
+        <img class="icon" src="../_shared/weather_icons/ic_clear.png" alt="">
+        <div class="info">
+          <div class="temp">14°</div>
+          <div class="status">晴</div>
+        </div>
+      </div>
+      <div class="card minmax-card">
+        <div class="col">
+          <span class="hint">最低</span>
+          <span class="val">8°</span>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <span class="hint">最高</span>
+          <span class="val">22°</span>
+        </div>
+      </div>
+      <div class="card info-card">
+        <div class="kv-row">
+          <span class="kv-key">湿度</span>
+          <span class="kv-value">45%</span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-key">更新</span>
+          <span class="kv-value">14:32</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 雨天 -->
+  <div class="stage">
+    <div class="meta">v5 · rain · 240×320</div>
+    <div class="screen">
+      <div class="city">Shanghai</div>
+      <div class="hero">
+        <img class="icon" src="../_shared/weather_icons/ic_rain.png" alt="">
+        <div class="info">
+          <div class="temp">18°</div>
+          <div class="status" style="color: var(--w-rain);">中雨</div>
+        </div>
+      </div>
+      <div class="card minmax-card">
+        <div class="col">
+          <span class="hint">最低</span>
+          <span class="val">15°</span>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <span class="hint">最高</span>
+          <span class="val">21°</span>
+        </div>
+      </div>
+      <div class="card info-card">
+        <div class="kv-row">
+          <span class="kv-key">湿度</span>
+          <span class="kv-value">82%</span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-key">更新</span>
+          <span class="kv-value">15:08</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 雷阵雨 -->
+  <div class="stage">
+    <div class="meta">v5 · thunder · 240×320</div>
+    <div class="screen">
+      <div class="city">Tokyo</div>
+      <div class="hero">
+        <img class="icon" src="../_shared/weather_icons/ic_thunder.png" alt="">
+        <div class="info">
+          <div class="temp">25°</div>
+          <div class="status" style="color: var(--w-thunder);">雷阵雨</div>
+        </div>
+      </div>
+      <div class="card minmax-card">
+        <div class="col">
+          <span class="hint">最低</span>
+          <span class="val">22°</span>
+        </div>
+        <div class="sep"></div>
+        <div class="col">
+          <span class="hint">最高</span>
+          <span class="val">28°</span>
+        </div>
+      </div>
+      <div class="card info-card">
+        <div class="kv-row">
+          <span class="kv-key">湿度</span>
+          <span class="kv-value">71%</span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-key">更新</span>
+          <span class="kv-value">16:45</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toolbar">
+  <button id="btn-grid">Toggle 8px Grid</button>
+</div>
+
+<script>
+  document.getElementById('btn-grid').onclick = function() {
+    document.body.classList.toggle('show-grid');
+    this.classList.toggle('on');
+  };
+</script>
+
+</body>
+</html>

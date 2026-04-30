@@ -1,0 +1,89 @@
+/* ============================================================================
+ * tokens.css —— 复刻 app/ui/ui_tokens.h
+ *
+ * 改 token 时两边必须同步：
+ *   颜色：app/ui/ui_tokens.h  ↔  此文件
+ *   字号：受 LVGL 字体限制，只有 14/16/24/48 四档
+ *   间距：8 倍数体系
+ *   圆角：6 / 10 / 14
+ *
+ * 任何 mockup 都只能引用这里的 var(--xxx)，不要硬编码颜色。
+ * ========================================================================= */
+
+:root {
+  /* ---- 颜色（iOS 浅色主题）---- */
+
+  /* 背景层级 */
+  --bg:          #F2F2F7;   /* 屏幕底 */
+  --panel:       #FFFFFF;   /* 卡片 */
+  --panel-hi:    #E5E5EA;   /* 卡片悬浮 */
+  --border:      #C6C6C8;   /* 分隔线 / 描边 */
+
+  /* 文本层级 */
+  --text:        #000000;   /* 主文字 */
+  --text-dim:    #3C3C43;   /* 次要 */
+  --text-muted:  #6E6E73;   /* 弱 */
+
+  /* 强调色 */
+  --accent:      #007AFF;   /* iOS 蓝 */
+  --accent-2:    #AF52DE;   /* iOS 紫 */
+
+  /* 状态色 */
+  --ok:          #34C759;
+  --warn:        #FF9500;
+  --err:         #FF3B30;
+  --info:        #5AC8FA;
+
+  /* 天气状态色（仅 weather 页用） */
+  --w-clear:     #F59E0B;
+  --w-cloudy:    #64748B;
+  --w-overcast:  #475569;
+  --w-rain:      #2563EB;
+  --w-snow:      #0891B2;
+  --w-fog:       #7C3AED;
+  --w-thunder:   #EA580C;
+
+  /* ---- 字号（受 LVGL 字体限制）---- */
+  --f-body:   14px;   /* APP_FONT_TEXT 14px CJK */
+  --f-title:  16px;   /* APP_FONT_TITLE 16px CJK */
+  --f-num:    24px;   /* lv_font_montserrat_24 */
+  --f-huge:   48px;   /* APP_FONT_HUGE 48px CJK，仅数字推荐 */
+
+  /* ---- 间距（8 倍数）---- */
+  --sp-xs:    4px;
+  --sp-sm:    8px;
+  --sp-md:    12px;
+  --sp-lg:    16px;
+  --sp-xl:    24px;
+  --sp-2xl:   32px;
+
+  /* ---- 圆角 ---- */
+  --r-sm:     6px;
+  --r-md:     10px;
+  --r-lg:     14px;
+}
+
+/* ============================================================================
+ * 全局重置 —— 模拟 LVGL 默认状态
+ * ========================================================================= */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  /* 禁止过渡 —— 设备上没有 CSS transition；要动画走 LVGL anim 系统 */
+  transition: none !important;
+}
+
+/* 中文字体：尽量贴近设备上的霞鹜文楷渲染 */
+body {
+  font-family:
+    "LXGW WenKai", "霞鹜文楷",
+    "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
+    -apple-system, system-ui, sans-serif;
+  font-size: var(--f-body);
+  color: var(--text);
+  /* PC 浏览器抗锯齿强于 LVGL stb_truetype；mockup 看起来会比设备清晰一些
+     是已知误差，按设备实际效果为准 */
+  -webkit-font-smoothing: antialiased;
+}

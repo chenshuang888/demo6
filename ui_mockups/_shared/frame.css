@@ -1,0 +1,105 @@
+/* ============================================================================
+ * frame.css —— 240×320 屏幕模拟器
+ *
+ * 提供：
+ *   .stage     —— 居中容器，2x 缩放（屏上看到 480×640，但写代码用 240×320）
+ *   .screen    —— 240×320 真实屏幕（直接对应 LVGL 的 lv_obj_create(NULL)）
+ *   .grid      —— (可选) 8px 网格背景，调对齐用，body 加 .show-grid 启用
+ *
+ * 用法：
+ *   <body class="show-grid">
+ *     <div class="stage">
+ *       <div class="screen">
+ *         ...你的页面内容...
+ *       </div>
+ *     </div>
+ *   </body>
+ * ========================================================================= */
+
+html, body {
+  width: 100%;
+  min-height: 100vh;
+  background: #1A1A1F;        /* mockup 工作台底色（不是设备底色）*/
+  color: #999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 32px 0;
+}
+
+.stage {
+  /* 2x 缩放：浏览器上显示 480×640，逻辑像素仍是 240×320 */
+  transform: scale(2);
+  transform-origin: center top;
+  margin-bottom: 360px;       /* scale 后留出空间，免得撞底 */
+}
+
+.stage .meta {
+  text-align: center;
+  font-size: 6px;
+  color: #555;
+  margin-bottom: 4px;
+  font-family: ui-monospace, monospace;
+}
+
+.screen {
+  width: 240px;
+  height: 320px;
+  background: var(--bg);
+  border-radius: 4px;
+  /* 屏幕外框：模拟一个轻微的设备边缘，仅装饰，不影响测量 */
+  outline: 4px solid #2A2A30;
+  outline-offset: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ---- 8px 对齐网格（调试用）---- */
+body.show-grid .screen {
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      rgba(0, 122, 255, 0.07) 0,
+      rgba(0, 122, 255, 0.07) 1px,
+      transparent 1px,
+      transparent 8px),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 122, 255, 0.07) 0,
+      rgba(0, 122, 255, 0.07) 1px,
+      transparent 1px,
+      transparent 8px);
+}
+
+/* ---- 多版本并列展示（v1.html / v2.html 都引这个，单页就一个 stage）---- */
+.stages-row {
+  display: flex;
+  flex-direction: row;
+  gap: 64px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+/* ---- 控件：底栏开关 ---- */
+.toolbar {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  z-index: 99;
+}
+.toolbar button {
+  background: #2A2A30;
+  color: #DDD;
+  border: 1px solid #44444A;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.toolbar button:hover { background: #3A3A42; }
+.toolbar button.on    { background: var(--accent); color: #FFF; border-color: var(--accent); }

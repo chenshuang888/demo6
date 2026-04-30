@@ -10,6 +10,7 @@
 #include "pages/page_dynamic_app.h"
 #include "page_router.h"
 #include "app_fonts.h"
+#include "weather_icons.h"
 #include "lvgl_port.h"
 #include "lcd_panel.h"
 #include "time_manager.h"
@@ -77,6 +78,9 @@ esp_err_t app_main_init(void)
 
     /* 初始化中文字体副本（带 fallback 链），必须在首个页面 create 之前 */
     app_fonts_init();
+
+    /* 初始化天气图标资源（解析 EMBED 进来的 8 张 .bin 为 lv_image_dsc_t） */
+    weather_icons_init();
 
     /* 恢复上次背光亮度（lvgl_port_init 内部已初始化 lcd_panel） */
     lcd_panel_set_backlight(backlight_storage_get());

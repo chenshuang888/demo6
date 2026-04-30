@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Weather v4 — 大图标左 + 温度右 + 详情卡</title>
+<link rel="stylesheet" href="../_shared/tokens.css">
+<link rel="stylesheet" href="../_shared/frame.css">
+<style>
+  /* ============================================================================
+   * v4 思路：复用 dash 的天气图标，hero 横排（左图右数）
+   *
+   * 关键改动：
+   *   1. ✅ 加图标（来自 dynamic_app/scripts/dash/assets/，已存在 8 张 40×40 PNG）
+   *   2. hero 区：左侧大图标（80×80 = 原图 2x 放大显示），右侧温度+状态纵排
+   *   3. 城市名移到顶部，弱化
+   *   4. 下方信息卡保留，但变窄高度
+   * ========================================================================= */
+
+  .screen {
+    padding: var(--sp-lg) var(--sp-lg) 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 顶部城市标签 */
+  .city {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+    text-align: center;
+    margin-bottom: var(--sp-md);
+  }
+
+  /* hero 横排：左图标 + 右温度信息 */
+  .hero {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-lg);
+    margin-bottom: var(--sp-xl);
+  }
+  .hero .icon {
+    width: 80px;
+    height: 80px;
+    /* 像素艺术：禁止图像缩放算法平滑（保持锐利）*/
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+  .hero .info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .hero .temp {
+    color: var(--text);
+    font-size: var(--f-huge);
+    line-height: 1;
+    font-weight: 400;
+  }
+  .hero .status {
+    color: var(--w-clear);
+    font-size: var(--f-title);
+    margin-top: var(--sp-xs);
+  }
+
+  /* 详情区：分隔线列表，无卡片描边 */
+  .details {
+    display: flex;
+    flex-direction: column;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-sm) 0;
+    border-top: 1px solid rgba(198, 198, 200, 0.5);
+  }
+  .row:last-child {
+    border-bottom: 1px solid rgba(198, 198, 200, 0.5);
+  }
+  .row .key {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .row .value {
+    color: var(--text);
+    font-size: var(--f-body);
+  }
+  .hl-row .value {
+    display: flex;
+    gap: var(--sp-sm);
+    align-items: baseline;
+  }
+  .hl-row .h { color: var(--w-thunder); }
+  .hl-row .l { color: var(--info); }
+  .hl-row .sep { color: var(--border); }
+</style>
+</head>
+<body>
+
+<div class="stages-row">
+
+  <!-- 晴天版本 -->
+  <div class="stage">
+    <div class="meta">v4 · clear · 240×320</div>
+    <div class="screen">
+      <div class="city">Los Angeles</div>
+      <div class="hero">
+        <img class="icon" src="../_shared/weather_icons/ic_clear.png" alt="">
+        <div class="info">
+          <div class="temp">14°</div>
+          <div class="status">晴</div>
+        </div>
+      </div>
+      <div class="details">
+        <div class="row hl-row">
+          <span class="key">高 / 低</span>
+          <span class="value">
+            <span class="h">22°</span>
+            <span class="sep">/</span>
+            <span class="l">8°</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="key">湿度</span>
+          <span class="value">45%</span>
+        </div>
+        <div class="row">
+          <span class="key">更新</span>
+          <span class="value">14:32</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 雨天版本（看不同图标 + 状态色变化）-->
+  <div class="stage">
+    <div class="meta">v4 · rain · 240×320</div>
+    <div class="screen">
+      <div class="city">Shanghai</div>
+      <div class="hero">
+        <img class="icon" src="../_shared/weather_icons/ic_rain.png" alt="">
+        <div class="info">
+          <div class="temp">18°</div>
+          <div class="status" style="color: var(--w-rain);">中雨</div>
+        </div>
+      </div>
+      <div class="details">
+        <div class="row hl-row">
+          <span class="key">高 / 低</span>
+          <span class="value">
+            <span class="h">21°</span>
+            <span class="sep">/</span>
+            <span class="l">15°</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="key">湿度</span>
+          <span class="value">82%</span>
+        </div>
+        <div class="row">
+          <span class="key">更新</span>
+          <span class="value">15:08</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 雷阵雨 -->
+  <div class="stage">
+    <div class="meta">v4 · thunder · 240×320</div>
+    <div class="screen">
+      <div class="city">Tokyo</div>
+      <div class="hero">
+        <img class="icon" src="../_shared/weather_icons/ic_thunder.png" alt="">
+        <div class="info">
+          <div class="temp">25°</div>
+          <div class="status" style="color: var(--w-thunder);">雷阵雨</div>
+        </div>
+      </div>
+      <div class="details">
+        <div class="row hl-row">
+          <span class="key">高 / 低</span>
+          <span class="value">
+            <span class="h">28°</span>
+            <span class="sep">/</span>
+            <span class="l">22°</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="key">湿度</span>
+          <span class="value">71%</span>
+        </div>
+        <div class="row">
+          <span class="key">更新</span>
+          <span class="value">16:45</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toolbar">
+  <button id="btn-grid">Toggle 8px Grid</button>
+</div>
+
+<script>
+  document.getElementById('btn-grid').onclick = function() {
+    document.body.classList.toggle('show-grid');
+    this.classList.toggle('on');
+  };
+</script>
+
+</body>
+</html>

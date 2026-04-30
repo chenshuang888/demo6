@@ -2,6 +2,10 @@ idf_component_register(
     SRCS
         "app_main.c"
         "app_fonts.c"
+        "weather_icons.c"
+        # UI 设计系统（token + widgets + anim）
+        "ui/ui_widgets.c"
+        "ui/ui_anim.c"
         "pages/page_time.c"
         "pages/page_time_adjust.c"
         "pages/page_menu.c"
@@ -15,8 +19,17 @@ idf_component_register(
         "pages/page_dynamic_app.c"
     INCLUDE_DIRS
         "."
+        "ui"
     EMBED_FILES
         "fonts/srhs_sc_subset.ttf"
+        "icons/ic_clear.bin"
+        "icons/ic_cloudy.bin"
+        "icons/ic_overcast.bin"
+        "icons/ic_rain.bin"
+        "icons/ic_snow.bin"
+        "icons/ic_fog.bin"
+        "icons/ic_thunder.bin"
+        "icons/ic_unknown.bin"
     REQUIRES
         framework
         drivers

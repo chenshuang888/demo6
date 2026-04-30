@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Weather v3 — hero 横排 + 单一大卡片</title>
+<link rel="stylesheet" href="../_shared/tokens.css">
+<link rel="stylesheet" href="../_shared/frame.css">
+<style>
+  /* ============================================================================
+   * v3 思路：温度横排 + 一张大卡承载所有数据（卡片化但不分裂）
+   *
+   * 关键改动：
+   *   1. 温度 + 状态标签横排（你之前提的"Clear 和温度一行"）
+   *   2. 城市移到顶部小标题
+   *   3. 把 minmax / humidity / updated 全部放进同一张大卡
+   *   4. 卡片大 = 占面积大 = "下半飘"问题消失（卡片是页面主体）
+   * ========================================================================= */
+
+  .screen { padding: var(--sp-lg); display: flex; flex-direction: column; }
+
+  /* 顶部小标题 */
+  .city {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+    text-align: center;
+    margin-bottom: var(--sp-md);
+  }
+
+  /* hero: 温度 + 状态横排，左右间隔 */
+  .hero {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: var(--sp-md);
+    margin-bottom: var(--sp-lg);
+  }
+  .hero .temp {
+    color: var(--text);
+    font-size: var(--f-huge);
+    line-height: 1;
+    font-weight: 400;
+  }
+  .hero .status {
+    color: var(--w-clear);
+    font-size: var(--f-title);
+  }
+
+  /* 大卡片承载所有详情 */
+  .data-card {
+    flex: 1;
+    background: var(--panel);
+    border-radius: var(--r-lg);
+    border: 1px solid rgba(198, 198, 200, 0.5);
+    padding: var(--sp-sm) var(--sp-md);
+    display: flex;
+    flex-direction: column;
+  }
+  .data-card .row {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(198, 198, 200, 0.4);
+  }
+  .data-card .row:last-child {
+    border-bottom: none;
+  }
+  .data-card .key {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .data-card .value {
+    color: var(--text);
+    font-size: var(--f-body);
+  }
+  .data-card .row.high .value { color: var(--w-thunder); }
+  .data-card .row.low  .value { color: var(--info); }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="meta">v3 · 横排 hero + 大卡片 · 240×320</div>
+  <div class="screen">
+    <div class="city">Los Angeles</div>
+
+    <div class="hero">
+      <span class="temp">14.3°</span>
+      <span class="status">Clear</span>
+    </div>
+
+    <div class="data-card">
+      <div class="row high">
+        <span class="key">最高</span>
+        <span class="value">22°</span>
+      </div>
+      <div class="row low">
+        <span class="key">最低</span>
+        <span class="value">8°</span>
+      </div>
+      <div class="row">
+        <span class="key">湿度</span>
+        <span class="value">45%</span>
+      </div>
+      <div class="row">
+        <span class="key">更新</span>
+        <span class="value">14:32</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button id="btn-grid">Toggle 8px Grid</button>
+</div>
+
+<script>
+  document.getElementById('btn-grid').onclick = function() {
+    document.body.classList.toggle('show-grid');
+    this.classList.toggle('on');
+  };
+</script>
+
+</body>
+</html>

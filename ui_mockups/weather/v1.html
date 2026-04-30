@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Weather v1 — current LVGL baseline</title>
+<link rel="stylesheet" href="../_shared/tokens.css">
+<link rel="stylesheet" href="../_shared/frame.css">
+<style>
+  /* ============================================================================
+   * weather/v1.html —— 当前 page_weather.c 的浏览器镜像
+   *
+   * 对应 LVGL 元素：
+   *   .city-lbl     ↔  s_ui.city_lbl       (TOP_MID, y=16)
+   *   .weather-lbl  ↔  s_ui.weather_lbl    (TOP_MID, y=46)
+   *   .temp-lbl     ↔  s_ui.temp_lbl       (TOP_MID, y=70)
+   *   .minmax-card  ↔  s_ui.minmax_card    (TOP_MID, y=160, w=220, h=50)
+   *   .info-card    ↔  s_ui.info_card      (TOP_MID, y=220, w=220, h=80)
+   *
+   * 数据使用真实示例：
+   *   Los Angeles, Clear, 14.3°, H 22°, L 8°, Humidity 45%, Updated 14:32
+   * ========================================================================= */
+
+  /* 城市名（顶部居中弱化色）*/
+  .city-lbl {
+    position: absolute;
+    top: 16px;          /* UI_SP_LG */
+    left: 0; right: 0;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: var(--f-body);
+  }
+
+  /* 天气描述（带状态色）*/
+  .weather-lbl {
+    position: absolute;
+    top: 46px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: var(--f-title);
+    color: var(--w-clear);   /* CLEAR → 暖橙 */
+  }
+
+  /* 巨号温度 */
+  .temp-lbl {
+    position: absolute;
+    top: 70px;
+    left: 0; right: 0;
+    text-align: center;
+    color: var(--text);
+    font-size: var(--f-huge);
+    font-weight: 400;
+    line-height: 1;
+  }
+
+  /* 卡片基础（对应 ui_card） */
+  .card {
+    position: absolute;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-md);
+    /* opa 50% 描边模拟 */
+    border-color: rgba(198, 198, 200, 0.5);
+  }
+
+  /* min/max 卡片 (220×50) */
+  .minmax-card {
+    top: 160px;
+    left: 10px;     /* (240 - 220) / 2 */
+    width: 220px;
+    height: 50px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0;     /* 内容自带 padding */
+  }
+  .minmax-card .col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .minmax-card .hint {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .minmax-card .val {
+    color: var(--text);
+    font-size: var(--f-title);
+  }
+  .minmax-card .sep {
+    width: 1px;
+    height: 28px;
+    background: rgba(198, 198, 200, 0.7);
+  }
+
+  /* info 卡片 (220×80) */
+  .info-card {
+    top: 220px;
+    left: 10px;
+    width: 220px;
+    height: 80px;
+    display: flex;
+    flex-direction: column;
+  }
+  .kv-row {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-sm) 0;
+    border-bottom: 1px solid rgba(198, 198, 200, 0.4);
+  }
+  .kv-row:last-child {
+    border-bottom: none;
+  }
+  .kv-key {
+    color: var(--text-muted);
+    font-size: var(--f-body);
+  }
+  .kv-value {
+    color: var(--text);
+    font-size: var(--f-body);
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="meta">v1 · current LVGL baseline · 240×320</div>
+  <div class="screen">
+    <div class="city-lbl">Los Angeles</div>
+    <div class="weather-lbl">Clear</div>
+    <div class="temp-lbl">14.3°</div>
+
+    <div class="card minmax-card">
+      <div class="col">
+        <span class="hint">LOW</span>
+        <span class="val">8°</span>
+      </div>
+      <div class="sep"></div>
+      <div class="col">
+        <span class="hint">HIGH</span>
+        <span class="val">22°</span>
+      </div>
+    </div>
+
+    <div class="card info-card">
+      <div class="kv-row">
+        <span class="kv-key">Humidity</span>
+        <span class="kv-value">45%</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">Updated</span>
+        <span class="kv-value">14:32</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button id="btn-grid">Toggle 8px Grid</button>
+  <button id="btn-info">Toggle Sizes</button>
+</div>
+
+<script>
+  // 切 8px 对齐网格
+  document.getElementById('btn-grid').onclick = function() {
+    document.body.classList.toggle('show-grid');
+    this.classList.toggle('on');
+  };
+  // 切尺寸标注（每个元素显示 W×H）
+  document.getElementById('btn-info').onclick = function() {
+    document.body.classList.toggle('show-info');
+    this.classList.toggle('on');
+    if (document.body.classList.contains('show-info')) {
+      document.querySelectorAll('.screen [class]').forEach(el => {
+        const r = el.getBoundingClientRect();
+        el.dataset.size = `${Math.round(r.width/2)}×${Math.round(r.height/2)}`;
+      });
+    }
+  };
+</script>
+<style>
+  body.show-info .screen [class]::after {
+    content: attr(data-size);
+    position: absolute;
+    top: 0; right: 2px;
+    font-size: 5px;
+    color: var(--accent);
+    font-family: ui-monospace, monospace;
+    background: rgba(255,255,255,0.85);
+    padding: 1px 2px;
+    border-radius: 2px;
+    pointer-events: none;
+  }
+</style>
+
+</body>
+</html>
