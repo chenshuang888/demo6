@@ -153,7 +153,7 @@ class UploadPage(ctk.CTkFrame):
         fut: ConcFuture = ConcFuture()
         self._step_lbl.configure(text=f"{kind}...", text_color=COLOR_WARN)
         self._bar.set(0.0)
-        self._app.bus.emit("upload:request", {
+        self._app.bus.emit_threadsafe("upload:request", {
             "kind": kind, "args": args, "future": fut,
         })
         fut.add_done_callback(lambda f: self.after(0, self._on_done, kind, f))

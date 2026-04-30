@@ -100,7 +100,7 @@ class NotifyPage(ctk.CTkFrame):
         cat_name = self._cat.get()
         cat_value = next((v for n, v in CATEGORIES if n == cat_name),
                           NOTIFY_CAT_GENERIC)
-        self._app.bus.emit("notify:manual", (title, body, cat_value))
+        self._app.bus.emit_threadsafe("notify:manual", (title, body, cat_value))
         preview = (body or "").replace("\n", " ")[:40]
         self._hist.insert("1.0", f"[{cat_name}] {title}  {preview}\n")
         self._status.configure(text="已发送", text_color=COLOR_OK)

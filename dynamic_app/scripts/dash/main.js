@@ -79,14 +79,18 @@ var state = {
 
 // 持久化最近采样
 function saveHist() {
-    sys.app.saveState({
+    sys.app.saveState(JSON.stringify({
         history: state.history.slice(-5),
         last:    state.last
-    });
+    }));
 }
 
 function loadHist() {
-    var s = sys.app.loadState();
+    var raw = sys.app.loadState();
+    var s = null;
+    if (raw) {
+        try { s = JSON.parse(raw); } catch (e) { s = null; }
+    }
     if (s && s.history && s.history.length !== undefined) {
         state.history = s.history.slice(-5);
     }
