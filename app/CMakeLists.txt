@@ -7,6 +7,7 @@ idf_component_register(
         "ui/ui_widgets.c"
         "ui/ui_anim.c"
         "ui/ui_statusbar.c"
+        "ui/ui_modal_card.c"
         "ui/app_shell_ui.c"
         # ---- Apps（每个目录 = 一个用户感知的应用）----
         "apps/lockscreen/lockscreen_app.c"

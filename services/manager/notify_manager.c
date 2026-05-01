@@ -226,3 +226,43 @@ void notify_manager_clear(void)
         ESP_LOGW(TAG, "clear persist failed: 0x%x", err);
     }
 }
+
+esp_err_t notify_manager_remove_at(size_t index)
+{
+    if (index >= s_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* get_at 序：slot = (head - 1 - index) mod N
+     * 删除该 slot：把比它"更旧"的所有 slot 朝 head 方向逐个前移一格。
+     *
+     * 环形缓冲示意（head 指向下一个写入位置，逻辑序：head-1 最新 → ...）：
+     *   逻辑 i=0    1    2 ...  count-1
+     *   slot head-1, head-2, ..., head-count
+     *
+     * 删 index 后：
+     *   把 [head-2, ..., head-count] 中比目标更旧的元素朝 head-1 方向平移
+     *   即：从 idx=index..count-2，把 i+1 槽位的内容拷到 i 槽位。
+     *   最后 head 回退一格、count-- 。
+     */
+    for (size_t i = index; i + 1 < s_count; i++) {
+        size_t dst = (s_head + NOTIFY_STORE_MAX - 1 - i)     % NOTIFY_STORE_MAX;
+        size_t src = (s_head + NOTIFY_STORE_MAX - 1 - (i+1)) % NOTIFY_STORE_MAX;
+        memcpy(&s_ring[dst], &s_ring[src], sizeof(s_ring[0]));
+    }
+
+    /* 最旧那个槽位被腾出，head 回退一格 */
+    s_head = (s_head + NOTIFY_STORE_MAX - 1) % NOTIFY_STORE_MAX;
+    memset(&s_ring[s_head], 0, sizeof(s_ring[0]));
+    s_count--;
+
+    s_version++;
+    if (!s_dirty) {
+        s_dirty = true;
+        s_dirty_since_us = esp_timer_get_time();
+    }
+
+    ESP_LOGI(TAG, "removed index=%u, remaining=%u",
+             (unsigned)index, (unsigned)s_count);
+    return ESP_OK;
+}

@@ -85,6 +85,14 @@ uint32_t notify_manager_version(void);
  */
 void notify_manager_clear(void);
 
+/**
+ * @brief 删除第 index 条通知（与 get_at 同序：0=最新）
+ *
+ * 仅 UI 线程调用。删除后立即更新 version 与 dirty，2 秒后自动落盘。
+ * 越界返回 ESP_ERR_INVALID_ARG。
+ */
+esp_err_t notify_manager_remove_at(size_t index);
+
 #ifdef __cplusplus
 }
 #endif
