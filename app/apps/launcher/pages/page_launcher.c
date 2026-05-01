@@ -386,7 +386,7 @@ static lv_obj_t *create(void)
 
     lv_obj_add_event_cb(s_ui.screen, on_screen_gesture, LV_EVENT_GESTURE, NULL);
 
-    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen);
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, false);
 
     s_ui.active_page = 0;
     rebuild_cells();

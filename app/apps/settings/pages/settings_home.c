@@ -183,7 +183,7 @@ static lv_obj_t *settings_home_create(void)
     lv_obj_add_event_cb(s_ui.screen, on_screen_pressed, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_ui.screen, on_screen_gesture, LV_EVENT_GESTURE, NULL);
 
-    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen);
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, false);
     create_title(s_ui.screen);
     create_list_card(s_ui.screen);
 

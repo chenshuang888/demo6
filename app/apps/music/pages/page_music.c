@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "app_fonts.h"
+#include "app_shell_ui.h"
 #include "media_manager.h"
 #include "media_service.h"
 #include "ble_driver.h"
@@ -34,8 +35,7 @@ static const char *TAG = "page_music";
 
 typedef struct {
     lv_obj_t *screen;
-    lv_obj_t *back_btn;
-    lv_obj_t *status_lbl;       /* 顶栏右上角连接状态 */
+    lv_obj_t *statusbar;
 
     lv_obj_t *title_lbl;
     lv_obj_t *artist_lbl;
@@ -51,14 +51,16 @@ typedef struct {
     int16_t   last_pos_sec;     /* 进度条增量更新，避免每帧无谓刷新 */
     bool      last_connected;
 
-    lv_style_t style_topbtn;
-    lv_style_t style_topbtn_pressed;
+    int       press_y0;         /* 底缘上滑退出 */
+
     lv_style_t style_ctrl_btn;
     lv_style_t style_ctrl_btn_pressed;
     lv_style_t style_ctrl_btn_disabled;
 } page_music_ui_t;
 
-static page_music_ui_t s_ui = {0};
+static page_music_ui_t s_ui = { .press_y0 = -1 };
+
+#define EXIT_EDGE_HEIGHT 50
 
 /* ============================================================================
  * CSS - 样式
@@ -66,18 +68,6 @@ static page_music_ui_t s_ui = {0};
 
 static void init_styles(void)
 {
-    /* 顶部返回按钮 */
-    lv_style_init(&s_ui.style_topbtn);
-    lv_style_set_bg_opa(&s_ui.style_topbtn, LV_OPA_TRANSP);
-    lv_style_set_border_width(&s_ui.style_topbtn, 0);
-    lv_style_set_shadow_width(&s_ui.style_topbtn, 0);
-    lv_style_set_text_color(&s_ui.style_topbtn, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_pad_all(&s_ui.style_topbtn, 4);
-
-    lv_style_init(&s_ui.style_topbtn_pressed);
-    lv_style_set_bg_color(&s_ui.style_topbtn_pressed, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_bg_opa(&s_ui.style_topbtn_pressed, LV_OPA_20);
-
     /* 三个控制按钮 */
     lv_style_init(&s_ui.style_ctrl_btn);
     lv_style_set_bg_color(&s_ui.style_ctrl_btn, lv_color_hex(COLOR_CARD));
@@ -100,29 +90,6 @@ static void init_styles(void)
  * HTML - 布局
  * ========================================================================= */
 
-static void create_top_bar(void)
-{
-    s_ui.back_btn = lv_btn_create(s_ui.screen);
-    lv_obj_remove_style_all(s_ui.back_btn);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn, 0);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn_pressed, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(s_ui.back_btn, 6, 0);
-    lv_obj_set_size(s_ui.back_btn, 80, 30);
-    lv_obj_align(s_ui.back_btn, LV_ALIGN_TOP_LEFT, 10, 10);
-
-    lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
-    lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
-    lv_obj_center(lbl);
-
-    /* 顶栏右上角连接状态 */
-    s_ui.status_lbl = lv_label_create(s_ui.screen);
-    lv_label_set_text(s_ui.status_lbl, "Off");
-    lv_obj_set_style_text_color(s_ui.status_lbl, lv_color_hex(COLOR_OFFLINE), 0);
-    lv_obj_set_style_text_font(s_ui.status_lbl, APP_FONT_TEXT, 0);
-    lv_obj_align(s_ui.status_lbl, LV_ALIGN_TOP_RIGHT, -14, 18);
-}
-
 static void create_info_block(void)
 {
     /* 标题 */
@@ -133,7 +100,7 @@ static void create_info_block(void)
     lv_label_set_long_mode(s_ui.title_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_ui.title_lbl, 220);
     lv_obj_set_style_text_align(s_ui.title_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_ui.title_lbl, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_align(s_ui.title_lbl, LV_ALIGN_TOP_MID, 0, 70);
 
     /* 歌手 */
     s_ui.artist_lbl = lv_label_create(s_ui.screen);
@@ -143,7 +110,7 @@ static void create_info_block(void)
     lv_label_set_long_mode(s_ui.artist_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_ui.artist_lbl, 220);
     lv_obj_set_style_text_align(s_ui.artist_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_ui.artist_lbl, LV_ALIGN_TOP_MID, 0, 92);
+    lv_obj_align(s_ui.artist_lbl, LV_ALIGN_TOP_MID, 0, 102);
 }
 
 static void create_progress_block(void)
@@ -151,7 +118,7 @@ static void create_progress_block(void)
     /* 进度条：只读，拖动不响应（移除 CLICKABLE） */
     s_ui.slider = lv_slider_create(s_ui.screen);
     lv_obj_set_size(s_ui.slider, 200, 6);
-    lv_obj_align(s_ui.slider, LV_ALIGN_TOP_MID, 0, 145);
+    lv_obj_align(s_ui.slider, LV_ALIGN_TOP_MID, 0, 152);
     lv_obj_remove_flag(s_ui.slider, LV_OBJ_FLAG_CLICKABLE);
     lv_slider_set_range(s_ui.slider, 0, 100);
     lv_slider_set_value(s_ui.slider, 0, LV_ANIM_OFF);
@@ -166,7 +133,7 @@ static void create_progress_block(void)
     lv_label_set_text(s_ui.time_lbl, "--:-- / --:--");
     lv_obj_set_style_text_color(s_ui.time_lbl, lv_color_hex(COLOR_MUTED), 0);
     lv_obj_set_style_text_font(s_ui.time_lbl, APP_FONT_TEXT, 0);
-    lv_obj_align(s_ui.time_lbl, LV_ALIGN_TOP_MID, 0, 165);
+    lv_obj_align(s_ui.time_lbl, LV_ALIGN_TOP_MID, 0, 172);
 }
 
 static lv_obj_t *create_ctrl_btn(const char *symbol, lv_obj_t **out_icon,
@@ -177,7 +144,7 @@ static lv_obj_t *create_ctrl_btn(const char *symbol, lv_obj_t **out_icon,
     lv_obj_add_style(btn, &s_ui.style_ctrl_btn, 0);
     lv_obj_add_style(btn, &s_ui.style_ctrl_btn_pressed, LV_STATE_PRESSED);
     lv_obj_set_size(btn, 60, 60);
-    lv_obj_align(btn, LV_ALIGN_TOP_MID, x_offset, 225);
+    lv_obj_align(btn, LV_ALIGN_TOP_MID, x_offset, 232);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *icon = lv_label_create(btn);
@@ -270,10 +237,6 @@ static void refresh_progress(const media_payload_t *m)
 
 static void apply_connection_style(bool connected)
 {
-    lv_label_set_text(s_ui.status_lbl, connected ? "Connected" : "Off");
-    lv_obj_set_style_text_color(s_ui.status_lbl,
-        lv_color_hex(connected ? COLOR_SUCCESS : COLOR_OFFLINE), 0);
-
     lv_obj_t *btns[] = { s_ui.prev_btn, s_ui.pp_btn, s_ui.next_btn };
     for (size_t i = 0; i < sizeof(btns) / sizeof(btns[0]); i++) {
         if (connected) {
@@ -288,10 +251,28 @@ static void apply_connection_style(bool connected)
  * 事件回调
  * ========================================================================= */
 
-static void on_back_clicked(lv_event_t *e)
+static void on_pressed(lv_event_t *e)
 {
     (void)e;
-    app_router_exit_to_launcher();
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) { s_ui.press_y0 = -1; return; }
+    lv_point_t p; lv_indev_get_point(indev, &p);
+    s_ui.press_y0 = p.y;
+}
+
+static void on_gesture(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    if (dir != LV_DIR_TOP) { s_ui.press_y0 = -1; return; }
+
+    int32_t screen_h = lv_obj_get_height(s_ui.screen);
+    if (s_ui.press_y0 >= 0 && s_ui.press_y0 >= screen_h - EXIT_EDGE_HEIGHT) {
+        app_router_exit_to_launcher();
+    }
+    s_ui.press_y0 = -1;
 }
 
 static void on_ctrl_btn_clicked(lv_event_t *e)
@@ -309,10 +290,12 @@ static void on_ctrl_btn_clicked(lv_event_t *e)
 
 static void bind_events(void)
 {
-    lv_obj_add_event_cb(s_ui.back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.prev_btn, on_ctrl_btn_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.pp_btn,   on_ctrl_btn_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_ui.next_btn, on_ctrl_btn_clicked, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_add_event_cb(s_ui.screen, on_pressed, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_ui.screen, on_gesture, LV_EVENT_GESTURE, NULL);
 }
 
 /* ============================================================================
@@ -322,11 +305,13 @@ static void bind_events(void)
 static void page_init(void)
 {
     init_styles();
-    create_top_bar();
     create_info_block();
     create_progress_block();
     create_control_buttons();
     bind_events();
+
+    /* statusbar 最后挂，确保在最顶层 */
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, true);
 
     s_ui.last_version = 0;
     s_ui.last_pos_sec = -2;     /* 强制首帧刷新 */
@@ -347,6 +332,7 @@ static lv_obj_t *page_music_create(void)
     ESP_LOGI(TAG, "Creating music page");
     s_ui.screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_ui.screen, lv_color_hex(COLOR_BG), 0);
+    s_ui.press_y0 = -1;
 
     page_init();
     return s_ui.screen;
@@ -361,13 +347,12 @@ static void page_music_destroy(void)
         s_ui.screen = NULL;
     }
 
-    lv_style_reset(&s_ui.style_topbtn);
-    lv_style_reset(&s_ui.style_topbtn_pressed);
     lv_style_reset(&s_ui.style_ctrl_btn);
     lv_style_reset(&s_ui.style_ctrl_btn_pressed);
     lv_style_reset(&s_ui.style_ctrl_btn_disabled);
 
     memset(&s_ui, 0, sizeof(s_ui));
+    s_ui.press_y0 = -1;
 }
 
 static void page_music_update(void)

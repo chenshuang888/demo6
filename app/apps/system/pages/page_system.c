@@ -1,5 +1,6 @@
 #include "page_system.h"
 #include "app_router.h"
+#include "app_shell_ui.h"
 #include "system_manager.h"
 #include "system_service.h"
 
@@ -36,7 +37,7 @@ typedef struct {
 
 typedef struct {
     lv_obj_t *screen;
-    lv_obj_t *back_btn;
+    lv_obj_t *statusbar;
 
     progress_row_t cpu;
     progress_row_t mem;
@@ -49,14 +50,15 @@ typedef struct {
     lv_obj_t *temp_lbl;
 
     uint32_t last_epoch;      /* 去重：manager epoch 变化才刷 */
+    int      press_y0;        /* 边缘上滑退出 */
 
     lv_style_t style_card;
-    lv_style_t style_topbtn;
-    lv_style_t style_topbtn_pressed;
     lv_style_t style_row;
 } page_system_ui_t;
 
-static page_system_ui_t s_ui = {0};
+static page_system_ui_t s_ui = { .press_y0 = -1 };
+
+#define EXIT_EDGE_HEIGHT 50
 
 /* ============================================================================
  * 样式
@@ -72,17 +74,6 @@ static void init_styles(void)
     lv_style_set_pad_all(&s_ui.style_card, 10);
     lv_style_set_shadow_width(&s_ui.style_card, 0);
 
-    lv_style_init(&s_ui.style_topbtn);
-    lv_style_set_bg_opa(&s_ui.style_topbtn, LV_OPA_TRANSP);
-    lv_style_set_border_width(&s_ui.style_topbtn, 0);
-    lv_style_set_shadow_width(&s_ui.style_topbtn, 0);
-    lv_style_set_text_color(&s_ui.style_topbtn, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_pad_all(&s_ui.style_topbtn, 4);
-
-    lv_style_init(&s_ui.style_topbtn_pressed);
-    lv_style_set_bg_color(&s_ui.style_topbtn_pressed, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_bg_opa(&s_ui.style_topbtn_pressed, LV_OPA_20);
-
     lv_style_init(&s_ui.style_row);
     lv_style_set_bg_opa(&s_ui.style_row, LV_OPA_TRANSP);
     lv_style_set_border_width(&s_ui.style_row, 0);
@@ -93,26 +84,14 @@ static void init_styles(void)
  * 布局
  * ========================================================================= */
 
-static void create_top_bar(void)
+static void create_title(void)
 {
-    s_ui.back_btn = lv_btn_create(s_ui.screen);
-    lv_obj_remove_style_all(s_ui.back_btn);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn, 0);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn_pressed, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(s_ui.back_btn, 6, 0);
-    lv_obj_set_size(s_ui.back_btn, 80, 30);
-    lv_obj_align(s_ui.back_btn, LV_ALIGN_TOP_LEFT, 10, 10);
-
-    lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
-    lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
-    lv_obj_center(lbl);
-
+    /* 页面标题 —— 在 statusbar 下方，居中 */
     lv_obj_t *title = lv_label_create(s_ui.screen);
     lv_label_set_text(title, "System");
     lv_obj_set_style_text_color(title, lv_color_hex(COLOR_TEXT), 0);
     lv_obj_set_style_text_font(title, APP_FONT_TITLE, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_RIGHT, -14, 15);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
 }
 
 /**
@@ -159,8 +138,8 @@ static void create_progress_card(void)
     lv_obj_t *card = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(card);
     lv_obj_add_style(card, &s_ui.style_card, 0);
-    lv_obj_set_size(card, 220, 180);
-    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_size(card, 220, 178);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -186,7 +165,7 @@ static void create_info_card(void)
     lv_obj_t *card = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(card);
     lv_obj_add_style(card, &s_ui.style_card, 0);
-    lv_obj_set_size(card, 220, 80);
+    lv_obj_set_size(card, 220, 76);
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 240);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -214,14 +193,34 @@ static void create_info_card(void)
  * 事件
  * ========================================================================= */
 
-static void on_back_clicked(lv_event_t *e)
+static void on_pressed(lv_event_t *e)
 {
-    app_router_exit_to_launcher();
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) { s_ui.press_y0 = -1; return; }
+    lv_point_t p; lv_indev_get_point(indev, &p);
+    s_ui.press_y0 = p.y;
+}
+
+static void on_gesture(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    if (dir != LV_DIR_TOP) { s_ui.press_y0 = -1; return; }
+
+    int32_t screen_h = lv_obj_get_height(s_ui.screen);
+    if (s_ui.press_y0 >= 0 && s_ui.press_y0 >= screen_h - EXIT_EDGE_HEIGHT) {
+        app_router_exit_to_launcher();
+    }
+    s_ui.press_y0 = -1;
 }
 
 static void bind_events(void)
 {
-    lv_obj_add_event_cb(s_ui.back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.screen, on_pressed, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_ui.screen, on_gesture, LV_EVENT_GESTURE, NULL);
 }
 
 /* ============================================================================
@@ -357,10 +356,13 @@ static void update_display(void)
 static void page_init(void)
 {
     init_styles();
-    create_top_bar();
+    create_title();
     create_progress_card();
     create_info_card();
     bind_events();
+
+    /* statusbar 最后挂，确保在最顶层 */
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, true);
 
     s_ui.last_epoch = 0;
     update_display();
@@ -372,6 +374,7 @@ static lv_obj_t *page_system_create(void)
 
     s_ui.screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_ui.screen, lv_color_hex(COLOR_BG), 0);
+    s_ui.press_y0 = -1;
 
     page_init();
 
@@ -391,11 +394,9 @@ static void page_system_destroy(void)
     }
 
     lv_style_reset(&s_ui.style_card);
-    lv_style_reset(&s_ui.style_topbtn);
-    lv_style_reset(&s_ui.style_topbtn_pressed);
     lv_style_reset(&s_ui.style_row);
 
-    s_ui.back_btn = NULL;
+    s_ui.statusbar = NULL;
     s_ui.cpu = (progress_row_t){0};
     s_ui.mem = (progress_row_t){0};
     s_ui.disk = (progress_row_t){0};
@@ -404,6 +405,7 @@ static void page_system_destroy(void)
     s_ui.uptime_lbl = NULL;
     s_ui.net_lbl = NULL;
     s_ui.temp_lbl = NULL;
+    s_ui.press_y0 = -1;
 }
 
 static void page_system_update(void)

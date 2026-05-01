@@ -117,7 +117,7 @@ static lv_obj_t *create(void)
     lv_obj_add_event_cb(s_ui.screen, on_pressed,  LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_ui.screen, on_gesture,  LV_EVENT_GESTURE, NULL);
 
-    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen);
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, false);
     create_hero(s_ui.screen, 24 + UI_SP_LG);
     create_info_card(s_ui.screen, 24 + UI_SP_LG + 96);
 

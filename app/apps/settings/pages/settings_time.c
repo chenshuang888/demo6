@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "app_fonts.h"
+#include "app_shell_ui.h"
 #include <time.h>
 #include <sys/time.h>
 
@@ -28,6 +29,7 @@ static const char *TAG = "settings_time";
 
 typedef struct {
     lv_obj_t *screen;
+    lv_obj_t *statusbar;
 
     lv_obj_t *preview_label;
 
@@ -119,12 +121,12 @@ static void create_preview(void)
     lv_label_set_text(s_ui.preview_label, "--:--:--");
     lv_obj_set_style_text_color(s_ui.preview_label, lv_color_hex(COLOR_ACCENT), 0);
     lv_obj_set_style_text_font(s_ui.preview_label, APP_FONT_LARGE, 0);
-    lv_obj_align(s_ui.preview_label, LV_ALIGN_TOP_MID, 0, 18);
+    lv_obj_align(s_ui.preview_label, LV_ALIGN_TOP_MID, 0, 30);
 }
 
 static void create_time_adjust_card(void)
 {
-    lv_obj_t *card = create_card(s_ui.screen, 55, 220, 100);
+    lv_obj_t *card = create_card(s_ui.screen, 63, 220, 100);
 
     lv_obj_t *title = create_small_label(card, "TIME", COLOR_MUTED);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -155,7 +157,7 @@ static void create_time_adjust_card(void)
 
 static void create_date_adjust_card(void)
 {
-    lv_obj_t *card = create_card(s_ui.screen, 170, 220, 140);
+    lv_obj_t *card = create_card(s_ui.screen, 174, 220, 140);
 
     lv_obj_t *title = create_small_label(card, "DATE", COLOR_MUTED);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -296,6 +298,9 @@ static lv_obj_t *create(void)
     create_date_adjust_card();
     bind_events();
     update_display();
+
+    /* statusbar 最后挂，确保在最顶层 */
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, true);
     return s_ui.screen;
 }
 
@@ -309,6 +314,7 @@ static void destroy(void)
     lv_style_reset(&s_ui.style_card);
     lv_style_reset(&s_ui.style_btn);
     lv_style_reset(&s_ui.style_btn_pressed);
+    s_ui.statusbar = NULL;
     s_ui.preview_label = NULL;
     s_ui.hour_up = s_ui.hour_dn = NULL;
     s_ui.min_up  = s_ui.min_dn  = NULL;

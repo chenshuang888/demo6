@@ -1,5 +1,6 @@
 #include "page_notifications.h"
 #include "app_router.h"
+#include "app_shell_ui.h"
 #include "notify_manager.h"
 
 #include "esp_log.h"
@@ -27,19 +28,20 @@ static const char *TAG = "page_notify";
 
 typedef struct {
     lv_obj_t *screen;
-    lv_obj_t *back_btn;
-    lv_obj_t *count_lbl;   /* 右上 "3/10" 小字 */
+    lv_obj_t *statusbar;
+    lv_obj_t *count_lbl;   /* 顶部 "3/10" 小字 */
     lv_obj_t *list;        /* 可滚动列表容器 */
     lv_obj_t *empty_lbl;   /* 空状态提示 */
 
     uint32_t last_version;
+    int      press_y0;     /* 边缘上滑退出 */
 
-    lv_style_t style_topbtn;
-    lv_style_t style_topbtn_pressed;
     lv_style_t style_item_card;
 } page_notify_ui_t;
 
-static page_notify_ui_t s_ui = {0};
+static page_notify_ui_t s_ui = { .press_y0 = -1 };
+
+#define EXIT_EDGE_HEIGHT 50
 
 /* ============================================================================
  * category → (symbol, color) 映射
@@ -75,17 +77,6 @@ static const category_style_t *get_cat_style(uint8_t cat)
 
 static void init_styles(void)
 {
-    lv_style_init(&s_ui.style_topbtn);
-    lv_style_set_bg_opa(&s_ui.style_topbtn, LV_OPA_TRANSP);
-    lv_style_set_border_width(&s_ui.style_topbtn, 0);
-    lv_style_set_shadow_width(&s_ui.style_topbtn, 0);
-    lv_style_set_text_color(&s_ui.style_topbtn, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_pad_all(&s_ui.style_topbtn, 4);
-
-    lv_style_init(&s_ui.style_topbtn_pressed);
-    lv_style_set_bg_color(&s_ui.style_topbtn_pressed, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_bg_opa(&s_ui.style_topbtn_pressed, LV_OPA_20);
-
     lv_style_init(&s_ui.style_item_card);
     lv_style_set_bg_color(&s_ui.style_item_card, lv_color_hex(COLOR_CARD));
     lv_style_set_bg_opa(&s_ui.style_item_card, LV_OPA_COVER);
@@ -99,34 +90,22 @@ static void init_styles(void)
  * HTML - 布局
  * ========================================================================= */
 
-static void create_top_bar(void)
+static void create_count_label(void)
 {
-    s_ui.back_btn = lv_btn_create(s_ui.screen);
-    lv_obj_remove_style_all(s_ui.back_btn);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn, 0);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn_pressed, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(s_ui.back_btn, 6, 0);
-    lv_obj_set_size(s_ui.back_btn, 80, 30);
-    lv_obj_align(s_ui.back_btn, LV_ALIGN_TOP_LEFT, 10, 10);
-
-    lv_obj_t *lbl = lv_label_create(s_ui.back_btn);
-    lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
-    lv_obj_set_style_text_font(lbl, APP_FONT_TEXT, 0);
-    lv_obj_center(lbl);
-
+    /* statusbar 下方左侧的 "n/10" 小字 */
     s_ui.count_lbl = lv_label_create(s_ui.screen);
     lv_label_set_text(s_ui.count_lbl, "0/10");
     lv_obj_set_style_text_color(s_ui.count_lbl, lv_color_hex(COLOR_MUTED), 0);
     lv_obj_set_style_text_font(s_ui.count_lbl, APP_FONT_TEXT, 0);
-    lv_obj_align(s_ui.count_lbl, LV_ALIGN_TOP_RIGHT, -14, 18);
+    lv_obj_align(s_ui.count_lbl, LV_ALIGN_TOP_RIGHT, -14, 30);
 }
 
 static void create_list_container(void)
 {
     s_ui.list = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(s_ui.list);
-    lv_obj_set_size(s_ui.list, 220, 262);
-    lv_obj_align(s_ui.list, LV_ALIGN_TOP_MID, 0, 48);
+    lv_obj_set_size(s_ui.list, 220, 254);
+    lv_obj_align(s_ui.list, LV_ALIGN_TOP_MID, 0, 56);
 
     /* 纵向 flex，可滚动 */
     lv_obj_set_flex_flow(s_ui.list, LV_FLEX_FLOW_COLUMN);
@@ -202,9 +181,28 @@ static void build_notification_item(lv_obj_t *parent,
  * 事件
  * ========================================================================= */
 
-static void on_back_clicked(lv_event_t *e)
+static void on_pressed(lv_event_t *e)
 {
-    app_router_exit_to_launcher();
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) { s_ui.press_y0 = -1; return; }
+    lv_point_t p; lv_indev_get_point(indev, &p);
+    s_ui.press_y0 = p.y;
+}
+
+static void on_gesture(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    if (dir != LV_DIR_TOP) { s_ui.press_y0 = -1; return; }
+
+    int32_t screen_h = lv_obj_get_height(s_ui.screen);
+    if (s_ui.press_y0 >= 0 && s_ui.press_y0 >= screen_h - EXIT_EDGE_HEIGHT) {
+        app_router_exit_to_launcher();
+    }
+    s_ui.press_y0 = -1;
 }
 
 /* ============================================================================
@@ -263,13 +261,17 @@ static void update_display(void)
 static void page_init(void)
 {
     init_styles();
-    create_top_bar();
+    create_count_label();
     create_list_container();
+
+    /* statusbar 最后挂，确保在最顶层 */
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, true);
 
     s_ui.last_version = (uint32_t)-1;  /* 强制首次刷新 */
     update_display();
 
-    lv_obj_add_event_cb(s_ui.back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_ui.screen, on_pressed, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_ui.screen, on_gesture, LV_EVENT_GESTURE, NULL);
 }
 
 static lv_obj_t *page_notifications_create(void)
@@ -278,6 +280,7 @@ static lv_obj_t *page_notifications_create(void)
 
     s_ui.screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_ui.screen, lv_color_hex(COLOR_BG), 0);
+    s_ui.press_y0 = -1;
 
     page_init();
     return s_ui.screen;
@@ -292,14 +295,13 @@ static void page_notifications_destroy(void)
         s_ui.screen = NULL;
     }
 
-    lv_style_reset(&s_ui.style_topbtn);
-    lv_style_reset(&s_ui.style_topbtn_pressed);
     lv_style_reset(&s_ui.style_item_card);
 
-    s_ui.back_btn = NULL;
+    s_ui.statusbar = NULL;
     s_ui.count_lbl = NULL;
     s_ui.list = NULL;
     s_ui.empty_lbl = NULL;
+    s_ui.press_y0 = -1;
 }
 
 static void page_notifications_update(void)

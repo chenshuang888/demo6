@@ -9,6 +9,7 @@
 #include "ui_tokens.h"
 #include "ui_widgets.h"
 #include "ui_anim.h"
+#include "app_shell_ui.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -28,6 +29,7 @@ static const char *TAG = "page_weather";
 
 typedef struct {
     lv_obj_t *screen;
+    lv_obj_t *statusbar;
     lv_obj_t *city_lbl;
     lv_obj_t *hero_box;
     lv_obj_t *icon_img;
@@ -106,7 +108,8 @@ static void create_top_label(void)
     lv_label_set_text(s_ui.city_lbl, "--");
     lv_obj_set_style_text_color(s_ui.city_lbl, UI_C_TEXT_MUTED, 0);
     lv_obj_set_style_text_font (s_ui.city_lbl, UI_F_BODY, 0);
-    lv_obj_align(s_ui.city_lbl, LV_ALIGN_TOP_MID, 0, UI_SP_MD);
+    /* y=28: statusbar(24) + 4 间距 */
+    lv_obj_align(s_ui.city_lbl, LV_ALIGN_TOP_MID, 0, 28);
 }
 
 static void create_hero(void)
@@ -114,8 +117,8 @@ static void create_hero(void)
     /* hero_box: 透明容器，240 宽，水平 flex 横排（左图右数） */
     s_ui.hero_box = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(s_ui.hero_box);
-    lv_obj_set_size(s_ui.hero_box, 240, 90);
-    lv_obj_align(s_ui.hero_box, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_size(s_ui.hero_box, 240, 86);
+    lv_obj_align(s_ui.hero_box, LV_ALIGN_TOP_MID, 0, 52);
     lv_obj_clear_flag(s_ui.hero_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow (s_ui.hero_box, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_ui.hero_box,
@@ -155,7 +158,7 @@ static void create_minmax_card(void)
     /* ui_card 自带 12px padding，这里覆盖为 0 让内部 flex 自由分布 */
     lv_obj_set_style_pad_all(s_ui.minmax_card, 0, 0);
     lv_obj_set_size(s_ui.minmax_card, 220, 50);
-    lv_obj_align(s_ui.minmax_card, LV_ALIGN_TOP_MID, 0, 160);
+    lv_obj_align(s_ui.minmax_card, LV_ALIGN_TOP_MID, 0, 148);
 
     lv_obj_set_flex_flow(s_ui.minmax_card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_ui.minmax_card,
@@ -211,7 +214,7 @@ static void create_info_card(void)
 {
     s_ui.info_card = ui_card(s_ui.screen);
     lv_obj_set_size(s_ui.info_card, 220, 80);
-    lv_obj_align(s_ui.info_card, LV_ALIGN_TOP_MID, 0, 220);
+    lv_obj_align(s_ui.info_card, LV_ALIGN_TOP_MID, 0, 212);
     lv_obj_set_flex_flow(s_ui.info_card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_ui.info_card, 0, 0);
 
@@ -303,6 +306,9 @@ static lv_obj_t *page_weather_create(void)
     create_minmax_card();
     create_info_card();
 
+    /* statusbar 最后挂，确保在最顶层 */
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, false);
+
     s_ui.last_updated_at = 0;
     s_ui.cur_temp_x10 = 0;
     update_display(false);
@@ -323,6 +329,7 @@ static void page_weather_destroy(void)
     }
     s_press_y0 = -1;
 
+    s_ui.statusbar    = NULL;
     s_ui.city_lbl     = NULL;
     s_ui.hero_box     = NULL;
     s_ui.icon_img     = NULL;
