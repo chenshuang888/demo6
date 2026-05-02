@@ -21,12 +21,19 @@ var VDOM = (function () {
     var nodes = {};
     var autoSeq = 0;
 
-    var FONT_MAP  = { text: sys.font.TEXT, title: sys.font.TITLE, huge: sys.font.HUGE };
+    var FONT_MAP  = { text: sys.font.TEXT, title: sys.font.TITLE, huge: sys.font.HUGE,
+                      icon24: sys.font.ICON_24, icon36: sys.font.ICON_36, numM: sys.font.NUM_M };
     var ALIGN_MAP = {
         tl: sys.align.TOP_LEFT,    tm: sys.align.TOP_MID,    tr: sys.align.TOP_RIGHT,
         lm: sys.align.LEFT_MID,    c:  sys.align.CENTER,     rm: sys.align.RIGHT_MID,
         bl: sys.align.BOTTOM_LEFT, bm: sys.align.BOTTOM_MID, br: sys.align.BOTTOM_RIGHT
     };
+    /* flex align: start/end/center/sevenly/around/between */
+    var FLEX_ALIGN_MAP = { start: 0, end: 1, center: 2, evenly: 3, around: 4, between: 5 };
+    /* label long mode: wrap/dot/scroll/clip */
+    var LONG_MODE_MAP  = { wrap: 0, dot: 1, scroll: 2, clip: 3 };
+    /* text align: left/center/right */
+    var TEXT_ALIGN_MAP = { left: 0, center: 1, right: 2 };
 
     function h(type, props, children) {
         return {
@@ -89,14 +96,82 @@ var VDOM = (function () {
             sys.ui.setStyle(id, sys.style.SCROLLABLE,
                 props.scrollable ? 1 : 0, 0, 0, 0);
         }
+        if (props.opa !== undefined)
+            sys.ui.setStyle(id, sys.style.OPA, props.opa | 0, 0, 0, 0);
+        if (props.bgOpa !== undefined)
+            sys.ui.setStyle(id, sys.style.BG_OPA, props.bgOpa | 0, 0, 0, 0);
+        if (props.grow !== undefined)
+            sys.ui.setStyle(id, sys.style.FLEX_GROW, props.grow | 0, 0, 0, 0);
+        if (props.textAlign !== undefined) {
+            var ta = TEXT_ALIGN_MAP[props.textAlign];
+            if (ta === undefined) ta = 0;
+            sys.ui.setStyle(id, sys.style.TEXT_ALIGN, ta, 0, 0, 0);
+        }
+        if (props.longMode !== undefined) {
+            var lm = LONG_MODE_MAP[props.longMode];
+            if (lm === undefined) lm = 0;
+            sys.ui.setStyle(id, sys.style.LONG_MODE, lm, 0, 0, 0);
+        }
+        if (props.rotate !== undefined) {
+            /* rotate: number(0.1°) | [angle, pivotX, pivotY] */
+            var r = props.rotate;
+            if (typeof r === 'number') {
+                sys.ui.setStyle(id, sys.style.ROTATION, r | 0, 0, 0, 0);
+            } else {
+                sys.ui.setStyle(id, sys.style.ROTATION,
+                    r[0] | 0, r[1] | 0, r[2] | 0, 0);
+            }
+        }
+        if (props.flexAlign !== undefined) {
+            /* flexAlign: [main, cross, track] (string keys) */
+            var fa = props.flexAlign;
+            var m = FLEX_ALIGN_MAP[fa[0]]; if (m === undefined) m = 0;
+            var x = FLEX_ALIGN_MAP[fa[1]]; if (x === undefined) x = 0;
+            var t = FLEX_ALIGN_MAP[fa[2]]; if (t === undefined) t = 0;
+            sys.ui.setStyle(id, sys.style.FLEX_ALIGN, m, x, t, 0);
+        }
+        if (props.border !== undefined) {
+            /* border: { color, width, side?, opa? }
+             * side: 'full'|'top'|'bottom'|'left'|'right' (默认 full) */
+            var bd = props.border;
+            var sb = 0x10;  /* full */
+            if      (bd.side === 'top')    sb = 0x01;
+            else if (bd.side === 'bottom') sb = 0x02;
+            else if (bd.side === 'left')   sb = 0x04;
+            else if (bd.side === 'right')  sb = 0x08;
+            sys.ui.setStyle(id, sys.style.BORDER,
+                bd.color | 0, (bd.width || 1) | 0, sb,
+                bd.opa === undefined ? 255 : (bd.opa | 0));
+        }
+        if (props.pressedBg !== undefined) {
+            /* pressedBg: { color, opa? } */
+            var pb = props.pressedBg;
+            sys.ui.setStyle(id, sys.style.PRESSED_BG,
+                pb.color | 0,
+                pb.opa === undefined ? 0 : (pb.opa | 0), 0, 0);
+        }
     }
 
     var HOOK_NAME = {
         1: 'onClick', 2: 'onPress', 3: 'onDrag',
         4: 'onRelease', 5: 'onLongPress'
     };
+    /* modal 回调注册表：sys.ui.modal 触发时 dispatcher 会查这里。
+     * key = modal_id 字符串（与 C 端 EV_MODAL.node_id 一致） */
+    var modalCbs = {};
+    var modalSeq = 1;
 
     function dispatch(startId, type, dx, dy) {
+        /* type=6 是 EV_MODAL：startId 是 modal_id，dx 是按钮索引（-1=取消） */
+        if (type === 6) {
+            var cb = modalCbs[startId];
+            if (cb) {
+                delete modalCbs[startId];
+                try { cb(dx | 0); }
+                catch (eM) { sys.log('modal cb throw: ' + eM); }
+            }
+            return;
+        }
         var node = nodes[startId];
         if (!node) return;
         var hook = HOOK_NAME[type];
@@ -116,6 +191,23 @@ var VDOM = (function () {
             }
             cur = cur._parent;
         }
+    }
+
+    /* 给业务用的 modal 入口：UI.modal({...}) 内部调，VDOM 自管 id 和 cb 注册。
+     * 业务一般通过 UI.modal 调用，不直接用 VDOM.showModal。 */
+    function showModal(opts) {
+        var id = modalSeq++;
+        if (typeof opts.onResult === 'function') {
+            modalCbs['' + id] = opts.onResult;
+        }
+        sys.ui.modal({
+            id: id,
+            title:   opts.title   || '',
+            body:    opts.body    || '',
+            action0: opts.action0 || '',
+            action1: opts.action1 || ''
+        });
+        return id;
     }
 
     function mount(node, parentId) {
@@ -175,7 +267,9 @@ var VDOM = (function () {
 
     var STYLE_KEYS = ['bg', 'fg', 'radius', 'size', 'align',
                       'pad', 'borderBottom', 'flex', 'font',
-                      'shadow', 'gap', 'scrollable'];
+                      'shadow', 'gap', 'scrollable',
+                      'opa', 'bgOpa', 'grow', 'textAlign', 'longMode',
+                      'rotate', 'flexAlign', 'border', 'pressedBg'];
 
     function shallowEq(a, b) {
         if (a === b) return true;
@@ -275,7 +369,8 @@ var VDOM = (function () {
 
     return {
         h: h, mount: mount, find: find, set: set, destroy: destroy,
-        dispatch: dispatch, render: render
+        dispatch: dispatch, render: render,
+        showModal: showModal
     };
 })();
 
@@ -352,3 +447,270 @@ function makeBle(appName) {
         isConnected: sys.ble.isConnected
     };
 }
+
+// ============================================================================
+// UI —— P0 设计系统：iOS 浅色风格高阶组件
+//
+// 仿照 app/ui/ui_widgets.c + ui_tokens.h，把"卡片/列表行/键值行/图标按钮/模态"
+// 等原生 app 通用控件用 VDOM 节点封装。脚本侧只用语义 token (UI.T.C_*) 和
+// 组件 (UI.card / UI.listRow ...) 就能搭出"和原生 app 看起来一致"的页面。
+//
+// 用法:
+//   var page = UI.screen('p', [
+//       UI.title('蓝牙'),
+//       UI.card({ pad: [0,0,0,0] }, [
+//           UI.listRow({ icon: sys.icons.BLUETOOTH, label: '蓝牙',
+//                        value: '已连接', iconBg: UI.T.C_ACCENT }),
+//       ])
+//   ]);
+//   VDOM.mount(page, null);
+//   sys.ui.attachRootListener('p');
+// ============================================================================
+
+var UI = (function () {
+
+    var T = sys.tokens;
+    var I = sys.icons;
+
+    // ---- screen: 屏幕底容器（iOS 灰白底，全屏）-----------------------------
+    function screen(id, children) {
+        return h('panel', {
+            id: id, size: [-100, -100], bg: T.C_BG, scrollable: false,
+            pad: [0, 0, 0, 0]
+        }, children || []);
+    }
+
+    // ---- title: 页面大标题（左对齐 16px CJK，黑字）-------------------------
+    function title(text, props) {
+        var p = props || {};
+        var merged = {
+            text: text, fg: T.C_TEXT, font: 'title',
+            pad: [T.SP_LG, T.SP_MD, T.SP_LG, 0]
+        };
+        for (var k in p) if (p.hasOwnProperty(k)) merged[k] = p[k];
+        return h('label', merged);
+    }
+
+    // ---- card: 白底卡片 + 1px 浅描边 + 圆角 14 -----------------------------
+    // opts.pad 默认 [12,12,12,12]；传 [0,0,0,0] 让里面的 listRow 自管 padding
+    function card(opts, children) {
+        var o = opts || {};
+        var props = {
+            id: o.id,
+            bg: T.C_PANEL,
+            radius: T.R_LG,
+            border: { color: T.C_BORDER, width: 1, side: 'full', opa: 128 },
+            pad: o.pad === undefined ? [T.SP_MD, T.SP_MD, T.SP_MD, T.SP_MD] : o.pad,
+            scrollable: false
+        };
+        if (o.size !== undefined)      props.size      = o.size;
+        if (o.align !== undefined)     props.align     = o.align;
+        if (o.flex !== undefined)      props.flex      = o.flex;
+        if (o.gap !== undefined)       props.gap       = o.gap;
+        if (o.flexAlign !== undefined) props.flexAlign = o.flexAlign;
+        return h('panel', props, children || []);
+    }
+
+    // ---- kvRow: 左右两端 key/value 行（无图标）----------------------------
+    // opts: { key, value, valueId?, divider? (true), id? }
+    function kvRow(opts) {
+        var o = opts || {};
+        var children = [
+            h('label', { text: o.key || '', fg: T.C_TEXT_MUTED, font: 'text' }),
+            h('label', { text: o.value === undefined ? '--' : ('' + o.value),
+                         fg: T.C_TEXT, font: 'text', id: o.valueId })
+        ];
+        var props = {
+            size: [-100, 36],
+            flex: 'row',
+            flexAlign: ['between', 'center', 'center'],
+            pad: [T.SP_MD, T.SP_SM, T.SP_MD, T.SP_SM]
+        };
+        if (o.divider !== false) {
+            props.border = { color: T.C_BORDER, width: 1, side: 'bottom', opa: 102 };
+        }
+        if (o.id) props.id = o.id;
+        return h('panel', props, children);
+    }
+
+    // ---- listRow: iOS 列表行（图标 + 标签 + 可选值 + chevron）-------------
+    // opts: { icon, label, value?, valueId?, iconBg?, iconColor?,
+    //         onClick?, divider? (true), id? }
+    function listRow(opts) {
+        var o = opts || {};
+        var iconBg = o.iconBg === undefined ? T.C_TEXT_MUTED : o.iconBg;
+        var iconFg = o.iconColor === undefined ? T.C_PANEL : o.iconColor;
+
+        var iconBlock = h('panel', {
+            size: [28, 28], bg: iconBg, radius: 6, scrollable: false
+        }, [
+            h('label', { text: o.icon || '', fg: iconFg, font: 'icon24',
+                         align: ['c', 0, 0] })
+        ]);
+
+        var children = [iconBlock];
+        children.push(h('label', { text: o.label || '', fg: T.C_TEXT,
+                                   font: 'text', grow: 1, longMode: 'dot' }));
+        if (o.value !== undefined && o.value !== null) {
+            children.push(h('label', { text: '' + o.value,
+                                       fg: T.C_TEXT_MUTED, font: 'text',
+                                       id: o.valueId }));
+        }
+        children.push(h('label', { text: I.CHEVRON_RIGHT,
+                                   fg: T.C_TEXT_MUTED, font: 'icon24' }));
+
+        var props = {
+            size: [-100, 48],
+            flex: 'row',
+            flexAlign: ['start', 'center', 'center'],
+            gap: [0, T.SP_MD],
+            pad: [T.SP_MD, 0, T.SP_MD, 0],
+            scrollable: false,
+            pressedBg: { color: T.C_PANEL_HI, opa: 255 }
+        };
+        if (o.divider !== false) {
+            props.border = { color: T.C_BORDER, width: 1, side: 'bottom', opa: 102 };
+        }
+        if (o.id) props.id = o.id;
+        if (o.onClick) props.onClick = o.onClick;
+
+        // 用 button 而不是 panel：天然 PRESSED 视觉态
+        return h('button', props, children);
+    }
+
+    // ---- iconBtn: 透明图标按钮（按下 accent 蒙层）-------------------------
+    function iconBtn(opts) {
+        var o = opts || {};
+        var color = o.color === undefined ? T.C_ACCENT : o.color;
+        return h('button', {
+            id: o.id,
+            size: [o.w || 36, o.h || 30],
+            radius: T.R_MD,
+            pad: [T.SP_XS, T.SP_XS, T.SP_XS, T.SP_XS],
+            pressedBg: { color: T.C_ACCENT, opa: 51 },
+            onClick: o.onClick
+        }, [
+            h('label', { text: o.icon || '', fg: color,
+                         font: 'icon24', align: ['c', 0, 0] })
+        ]);
+    }
+
+    // ---- pillBtn: 填充胶囊按钮（accent 蓝底白字）--------------------------
+    function pillBtn(opts) {
+        var o = opts || {};
+        return h('button', {
+            id: o.id,
+            size: [o.w || 140, o.h || 44],
+            bg: o.bg === undefined ? T.C_ACCENT : o.bg,
+            radius: T.R_MD,
+            pressedBg: { color: 0x000000, opa: 38 },
+            onClick: o.onClick
+        }, [
+            h('label', { text: o.text || '',
+                         fg: o.fg === undefined ? T.C_PANEL : o.fg,
+                         font: 'title', align: ['c', 0, 0] })
+        ]);
+    }
+
+    // ---- badge: 圆角胶囊小标签（数字徽章 / tag）---------------------------
+    function badge(opts) {
+        var o = opts || {};
+        return h('panel', {
+            id: o.id,
+            size: [o.w || 36, o.h || 20],
+            bg: o.bg === undefined ? T.C_ACCENT : o.bg,
+            radius: T.R_PILL,
+            scrollable: false
+        }, [
+            h('label', { text: o.text === undefined ? '' : ('' + o.text),
+                         fg: o.fg === undefined ? T.C_PANEL : o.fg,
+                         font: 'text', align: ['c', 0, 0] })
+        ]);
+    }
+
+    // ---- statusBar: 仿原生顶栏（左 title，右图标占位）---------------------
+    // 不实现自绘电池/蓝牙（C 原生层的事），给业务页一个一致的标题区
+    function statusBar(opts) {
+        var o = opts || {};
+        var children = [
+            h('label', { text: o.title || '', fg: T.C_TEXT, font: 'title',
+                         grow: 1, longMode: 'dot' })
+        ];
+        if (o.right) {
+            children.push(h('label', { text: o.right, fg: T.C_TEXT_MUTED,
+                                       font: 'icon24' }));
+        }
+        return h('panel', {
+            size: [-100, 44],
+            flex: 'row',
+            flexAlign: ['between', 'center', 'center'],
+            pad: [T.SP_LG, T.SP_SM, T.SP_LG, T.SP_SM],
+            scrollable: false
+        }, children);
+    }
+
+    // ---- divider: 水平分隔线 -----------------------------------------------
+    function divider() {
+        return h('panel', {
+            size: [-100, 1], bg: T.C_BORDER, opa: 102, scrollable: false
+        });
+    }
+
+    // ---- hitZone: 屏底 30px 透明上滑退出区（仿原生 home indicator）---------
+    // opts: { id?, onExit }
+    function hitZone(opts) {
+        var o = opts || {};
+        var accDy = 0;
+        return h('panel', {
+            id: o.id || '_hitZone',
+            size: [-100, 30],
+            align: ['bm', 0, 0],
+            bg: 0x000000, bgOpa: 0,
+            scrollable: false,
+            onPress:   function () { accDy = 0; },
+            onDrag:    function (e) { accDy += (e.dy | 0); },
+            onRelease: function () {
+                var up = -accDy;   // 上滑为正
+                if (up >= 30 && o.onExit) o.onExit();
+                accDy = 0;
+            }
+        });
+    }
+
+    // ---- swipeExit: 一行启用屏底上滑退出（hitZone 的别名+追加 root） -------
+    // 用法: UI.swipeExit(rootChildren, function(){ ... })
+    //   传入 rootChildren 数组（screen 的子节点），返回一个新数组，末尾追加 hitZone
+    function swipeExit(children, onExit) {
+        var arr = (children || []).slice();
+        arr.push(hitZone({ onExit: onExit }));
+        return arr;
+    }
+
+    // ---- modal: 弹模态卡片（C 端实现，JS 通过 VDOM.showModal 注册回调） -----
+    // opts: { title, body, action0?, action1?, onResult? }
+    //   onResult(idx): idx = 0/1（按钮）, -1（点遮罩/下滑取消）
+    function modal(opts) {
+        return VDOM.showModal(opts || {});
+    }
+
+    // ---- toast: 屏底浮一条 + 自动消失 --------------------------------------
+    function toast(text, durMs) {
+        sys.ui.toast('' + text, durMs | 0);
+    }
+
+    // ---- fadeIn: 给已 mount 的对象做淡入动画 -------------------------------
+    function fadeIn(id, delayMs) {
+        sys.ui.fadeIn(id, delayMs | 0);
+    }
+
+    return {
+        T: T, I: I,
+        screen: screen, title: title, card: card,
+        kvRow: kvRow, listRow: listRow,
+        iconBtn: iconBtn, pillBtn: pillBtn,
+        badge: badge, statusBar: statusBar,
+        divider: divider, hitZone: hitZone,
+        modal: modal, toast: toast, fadeIn: fadeIn,
+        swipeExit: swipeExit
+    };
+})();

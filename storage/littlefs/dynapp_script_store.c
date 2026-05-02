@@ -394,28 +394,64 @@ int dynapp_script_store_list(char out[][DYNAPP_SCRIPT_STORE_MAX_NAME + 1], int m
 {
     if (!out || max <= 0) return 0;
     DIR *d = opendir(APPS_DIR);
-    if (!d) return 0;
+    if (!d) {
+        ESP_LOGW(TAG, "list: opendir(%s) failed errno=%d", APPS_DIR, errno);
+        return 0;
+    }
+    ESP_LOGI(TAG, "list: scanning %s ...", APPS_DIR);
 
     int n = 0;
+    int seen = 0;
     struct dirent *ent;
-    while (n < max && (ent = readdir(d)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
+    while ((ent = readdir(d)) != NULL) {
+        seen++;
+        if (ent->d_name[0] == '.') {
+            ESP_LOGI(TAG, "list:   '%s' SKIP (dotfile)", ent->d_name);
+            continue;
+        }
 
         char sub[PATH_BUFSZ];
         if (snprintf(sub, sizeof(sub), "%s/%s",
-                     APPS_DIR, ent->d_name) >= (int)sizeof(sub)) continue;
+                     APPS_DIR, ent->d_name) >= (int)sizeof(sub)) {
+            ESP_LOGW(TAG, "list:   '%s' SKIP (path too long)", ent->d_name);
+            continue;
+        }
         struct stat st;
-        if (stat(sub, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (stat(sub, &st) != 0) {
+            ESP_LOGW(TAG, "list:   '%s' SKIP (stat err errno=%d)",
+                     ent->d_name, errno);
+            continue;
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            ESP_LOGI(TAG, "list:   '%s' SKIP (not a dir, mode=0%o)",
+                     ent->d_name, (unsigned)st.st_mode);
+            continue;
+        }
 
         size_t l = strlen(ent->d_name);
-        if (l == 0 || l > DYNAPP_SCRIPT_STORE_MAX_NAME) continue;
-        if (!app_id_is_valid(ent->d_name)) continue;
+        if (l == 0 || l > DYNAPP_SCRIPT_STORE_MAX_NAME) {
+            ESP_LOGW(TAG, "list:   '%s' SKIP (len=%u, max=%u)",
+                     ent->d_name, (unsigned)l,
+                     (unsigned)DYNAPP_SCRIPT_STORE_MAX_NAME);
+            continue;
+        }
+        if (!app_id_is_valid(ent->d_name)) {
+            ESP_LOGW(TAG, "list:   '%s' SKIP (invalid charset)", ent->d_name);
+            continue;
+        }
 
+        if (n >= max) {
+            ESP_LOGW(TAG, "list:   '%s' OK but out full (n=%d max=%d)",
+                     ent->d_name, n, max);
+            continue;
+        }
         memcpy(out[n], ent->d_name, l);
         out[n][l] = '\0';
+        ESP_LOGI(TAG, "list:   '%s' OK (slot=%d)", ent->d_name, n);
         n++;
     }
     closedir(d);
+    ESP_LOGI(TAG, "list: done, seen=%d valid=%d", seen, n);
     return n;
 }
 

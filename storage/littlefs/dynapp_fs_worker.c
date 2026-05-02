@@ -31,7 +31,9 @@ static const char *TAG = "dynapp_fs";
  * 8 是为 chunk + commit + 别的小任务留富余。 */
 #define FS_QUEUE_LEN          16
 #define FS_CHUNK_MAX_BYTES    196   /* 与 BLE 上传一帧 payload 大小对齐 */
-#define FS_LIST_MAX           8
+#define FS_LIST_MAX           24    /* PC GUI 列表能返回的最大 app 数；
+                                       * 超过部分被截断，注意 launcher 那边
+                                       * MAX_DYN_APPS 是独立的 16 槽位 */
 
 /* ============================================================================
  * §1. 队列 item

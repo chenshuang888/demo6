@@ -20,21 +20,45 @@ VDOM                         // 声明式 UI 框架
   ├─ set(id, patch)            // 局部 patch 单节点
   ├─ find(id)                  // 取 vnode
   ├─ destroy(id)               // 销毁子树
+  ├─ showModal(opts)           // 内部用，业务请走 UI.modal
   └─ dispatch(...)             // 内部用，不调
 h                            // VDOM.h 的短名
 makeBle(appName)             // → ble 对象（见 §5）
+UI                           // iOS 浅色风格高阶组件库（见 §11）
+  ├─ T / I                     // 设计 token / 图标常量短名
+  ├─ screen / title / card     // 容器类
+  ├─ kvRow / listRow           // 列表行
+  ├─ iconBtn / pillBtn / badge // 按钮 / 徽章
+  ├─ statusBar / divider       // 装饰
+  ├─ hitZone                   // 页内手势（屏底退出由宿主层兜底，业务一般不用）
+  ├─ modal({...})              // 弹模态卡片（封装 sys.ui.modal）
+  ├─ toast(text, durMs)        // 屏底浮一条
+  ├─ fadeIn(id, delayMs)       // 淡入动画
+  └─ swipeExit(children, fn)   // 给 children 末尾加一个 hitZone
 
 // ── 固件原生（每个 app 都有） ──
 sys
 ├─ log(msg)
 ├─ ui.*                      // 命令式绘图原语（一般不直接用，VDOM 已包好）
-├─ time.uptimeMs() / uptimeStr()
+│   ├─ createLabel / createPanel / createButton / createImage
+│   ├─ setText / setStyle / setImageSrc / destroy / attachRootListener
+│   ├─ modal({...})           // 模态弹层（见 §11.2）
+│   ├─ toast(text, durMs)     // 屏底 toast
+│   └─ fadeIn(id, delayMs)    // 淡入动画
+├─ time.*
+│   ├─ uptimeMs() / uptimeStr()
+│   ├─ now()                  // 当前 unix 秒（OS 时间）
+│   ├─ parts(ts)              // {y,mo,d,h,mi,s,wday,yday}
+│   └─ format(ts, fmt)        // strftime 包装
 ├─ app.saveState() / loadState() / eraseState()
 ├─ ble.send / onRecv / isConnected      ⚠️ 不直接用，请走 makeBle
-├─ symbols.*                 // LVGL 内置图标字面量
-├─ style.*                   // setStyle key 枚举（VDOM 内部用）
+├─ fs.read / write / exists / remove / list   // app 沙箱文件 IO
+├─ symbols.*                 // LVGL 内置图标字面量（PLAY/BLUETOOTH/...）
+├─ icons.*                   // Material Symbols 矢量图标 codepoint（见 §11.3）
+├─ tokens.*                  // 设计 token 常量（颜色/间距/圆角，见 §11.1）
+├─ style.*                   // setStyle key 枚举（VDOM 内部用，21 个 key）
 ├─ align.*                   // 对齐方式枚举
-└─ font.*                    // TEXT / TITLE / HUGE
+└─ font.*                    // TEXT/TITLE/HUGE/ICON_24/ICON_36/NUM_M
 
 setInterval(fn, ms)          // 周期回调，返 id
 clearInterval(id)            // 取消
@@ -156,11 +180,28 @@ sys.ui.attachRootListener(id)         // 在最外层 panel 上调一次！
 ## 3. sys.time —— 时间
 
 ```js
+// 开机相关
 var ms = sys.time.uptimeMs();        // 开机至今毫秒
 var s  = sys.time.uptimeStr();       // "00:01:23"
+
+// 真·墙钟（OS 系统时间，由 PC/NTP 同步获得）
+var ts = sys.time.now();             // 当前 unix 秒（int）
+
+// 拆解时间分量（按本地时区）
+var t = sys.time.parts(ts);
+// t = { y:2026, mo:5, d:2, h:14, mi:32, s:7, wday:5, yday:121 }
+//   wday：0=周日 .. 6=周六（与 struct tm 一致）
+
+// 格式化字符串（strftime 包装）
+sys.time.format(ts, "%H:%M");                // "14:32"
+sys.time.format(ts, "%Y-%m-%d %H:%M");       // "2026-05-02 14:32"
+sys.time.format(ts, "%A");                   // "Friday"（受系统 locale）
 ```
 
-⚠️ **没有真实墙钟**。要做闹钟/日历需要业务自己通过 BLE 从 PC 同步。
+约束：
+- `now()` 返回 32-bit unix 秒，**2038 年溢出**，不影响近 12 年
+- 系统时间需要 PC 端 BLE 时间服务推送过来才有效；未同步前 `now()` 可能返回 0 或编译时刻
+- `parts/format` 都是同步调用，性能足够 1Hz 刷新
 
 ---
 
@@ -239,13 +280,16 @@ h('label', { id: 'x', text: sys.symbols.BLUETOOTH + ' BT' })
 
 ## 8. sys.font —— 字体
 
-| 常量 | 用途 |
-|---|---|
-| `sys.font.TEXT` (0) | 默认正文 |
-| `sys.font.TITLE` (1) | 标题中等 |
-| `sys.font.HUGE` (2) | 超大数字（时钟/温度） |
+| 常量 | 用途 | VDOM 字符串 |
+|---|---|---|
+| `sys.font.TEXT` (0)    | 默认正文 14px CJK            | `'text'` |
+| `sys.font.TITLE` (1)   | 标题 16px CJK               | `'title'` |
+| `sys.font.HUGE` (2)    | 超大数字 48px               | `'huge'` |
+| `sys.font.ICON_24` (3) | Material Symbols 24px 图标 | `'icon24'` |
+| `sys.font.ICON_36` (4) | Material Symbols 36px 图标 | `'icon36'` |
+| `sys.font.NUM_M` (5)   | 中号 ASCII 数字 24px (Montserrat) | `'numM'` |
 
-VDOM 里用字符串 `'text'` / `'title'` / `'huge'` 即可。
+**重要**：要显示 `sys.icons.*` 的字符，label 的 `font` 必须是 `'icon24'` 或 `'icon36'`，否则字体表里没有那些 codepoint，渲染成□。
 
 ---
 
@@ -261,6 +305,9 @@ VDOM 里用字符串 `'text'` / `'title'` / `'huge'` 即可。
 | ble.on 不回调 | 自己又调了一次 `makeBle("xxx")` 覆盖 | 每个 app 只调一次 makeBle |
 | `SyntaxError: catch variable already exists` | 同函数内多个 `catch (e)` 同名 | 用 `eParse` / `eAny` 等不同名字 |
 | TLSF assert 重启 | 加 native 但没改 `DYNAMIC_APP_EXTRA_NATIVE_COUNT` | 同步改宏 |
+| `sys.icons.*` 显示为方块 | label 的 `font` 不是 `'icon24'/'icon36'` | 用图标必须配图标字体 |
+| modal 弹出后按钮不响应 | 没在 root panel 上调 `attachRootListener` 之前先 mount | 顺序：mount root → attachRootListener → 之后才能 modal |
+| 屏底自定义按钮按不到 | 宿主层占了屏底 28px 做上滑退出区 | 屏底 28px 不放点击元素（仿手机 home indicator） |
 
 ---
 
@@ -297,3 +344,182 @@ sys.log('hello: ready');
 ```
 
 完整业务，**24 行**。框架那 348 行 VDOM + makeBle 全部由 prelude 自动注入。
+
+---
+
+## 11. UI 设计系统（iOS 浅色 + 高阶组件）
+
+> prelude 暴露 `UI` 模块，提供与原生 app 一致的 iOS 浅色风格组件。
+> 不强制使用 —— 想做暗色 / 自定义风格仍可直接用 VDOM 原语。
+> 详细规范见 [`动态app_UI设计系统.md`](./动态app_UI设计系统.md)。
+
+### 11.1 设计 token（`sys.tokens` / `UI.T`）
+
+```js
+// 颜色（iOS 系统色）
+UI.T.C_BG          // 0xF2F2F7  屏幕底
+UI.T.C_PANEL       // 0xFFFFFF  卡片
+UI.T.C_PANEL_HI    // 0xE5E5EA  按下高亮
+UI.T.C_BORDER      // 0xC6C6C8  分隔线
+UI.T.C_TEXT        // 0x000000  主文字
+UI.T.C_TEXT_DIM    // 0x3C3C43  次要
+UI.T.C_TEXT_MUTED  // 0x6E6E73  弱
+UI.T.C_ACCENT      // 0x007AFF  iOS 蓝（主操作）
+UI.T.C_ACCENT_2    // 0xAF52DE  iOS 紫
+UI.T.C_OK / C_WARN / C_ERR / C_INFO  // 状态色
+
+// 间距（8 倍数体系）
+UI.T.SP_XS=4 / SP_SM=8 / SP_MD=12 / SP_LG=16 / SP_XL=24 / SP_2XL=32
+
+// 圆角
+UI.T.R_SM=6 / R_MD=10 / R_LG=14 / R_PILL=1000
+
+// 动画时长（ms）
+UI.T.DUR_FAST=150 / DUR_NORM=250 / DUR_SLOW=400
+```
+
+**惯例**：业务代码不写裸的 `0xFFFFFF` 或 `12`，统一用 token，未来换肤只改 prelude。
+
+### 11.2 sys.ui.modal / toast / fadeIn —— 通用 UI 能力
+
+```js
+// 模态弹层（C 端实现，统一动画 + 手势 + 按钮逻辑）
+UI.modal({
+    title:   '清空所有通知？',
+    body:    '此操作无法撤销。',
+    action0: '取消',           // 缺省/空表示无该按钮
+    action1: '清空',
+    onResult: function (idx) {
+        // idx: 0=action0 / 1=action1 / -1=点遮罩或下滑取消
+        if (idx === 1) doClearAll();
+    }
+});
+
+// 屏底 toast，自动消失
+UI.toast('已删除', 800);              // 默认 1500ms
+
+// 给已 mount 的对象做淡入（透明 0 → cover）
+UI.fadeIn('list', 100);              // 100ms 后开始
+```
+
+**模态行为**：
+- 全屏半透明黑遮罩 → 点击关闭（dx=-1）
+- 居中卡片宽 224 高自适应（最大 270，超过滚动）
+- 卡片下滑 ≥30px → 关闭（dx=-1）
+- 按钮按下后**先关再回调**，避免回调里操作即将销毁的对象
+- 同时只有一个 modal，再调一次先关旧的再开新的
+
+### 11.3 sys.icons —— Material Symbols 图标
+
+```js
+// 必须配 'icon24' 或 'icon36' 字体才显示
+h('label', { text: sys.icons.BLUETOOTH, font: 'icon24', fg: UI.T.C_ACCENT })
+
+// 可用图标（持续追加）
+sys.icons.BLUETOOTH / BT_DISABLED
+sys.icons.SCHEDULE / WEATHER / NOTIFICATIONS / MUSIC / TUNE
+sys.icons.SETTINGS / BRIGHTNESS / INFO / EDIT_CALENDAR
+sys.icons.APPS / CHEVRON_LEFT / CHEVRON_RIGHT / DOT / DOT_SMALL
+```
+
+需要更多 codepoint 见 `app/app_fonts.h`，加进 `dynamic_app_natives.c::sys.icons.*` 即可暴露。
+
+### 11.4 UI 高阶组件
+
+仿原生 `app/ui/ui_widgets.c`，覆盖动态 app 90% 的"标准布局"需求。
+
+#### `UI.screen(id, children)`
+全屏底容器（白底 `C_BG`，撑满，pad 0）。整个 app 的最外层 panel。
+
+#### `UI.title(text, props?)`
+页面大标题（左对齐 16px CJK，主文字色，自带左右 16px / 上下 ?）
+
+#### `UI.card(opts, children)`
+白底卡片 + 1px 浅描边 + 圆角 14。
+```js
+UI.card({ pad: [0,0,0,0] }, [   // pad=[0,0,0,0] 让里面 listRow 自管 padding
+    UI.listRow({...}),
+    UI.listRow({...})
+])
+```
+
+#### `UI.kvRow({ key, value, valueId?, divider? })`
+两端对齐的键值行（左灰 key + 右黑 value），底部 1px 分隔线。
+
+#### `UI.listRow({ icon, label, value?, iconBg?, iconColor?, onClick?, divider?, valueId?, id? })`
+iOS 列表行：左 28×28 圆角彩底图标块 + label（自动 dot 截断）+ 可选 value + chevron 右指。整行作为 button，按下自动变浅灰高亮。
+```js
+UI.listRow({
+    icon: sys.icons.BLUETOOTH,
+    label: '蓝牙',
+    value: '已连接',
+    iconBg: UI.T.C_ACCENT,
+    onClick: function () { gotoBluetoothPage(); }
+})
+```
+
+#### `UI.iconBtn({ icon, w?, h?, color?, onClick?, id? })`
+透明图标按钮 + 按下 accent 蒙层。
+
+#### `UI.pillBtn({ text, w?, h?, bg?, fg?, onClick?, id? })`
+胶囊按钮（默认 accent 蓝底白字）。
+
+#### `UI.badge({ text, bg?, fg?, w?, h?, id? })`
+小圆角胶囊（数字徽章 / tag）。
+
+#### `UI.statusBar({ title, right? })`
+**业务自绘的标题区**，44px 高（不是固件状态栏；那个是宿主层挂的 24px 电池/蓝牙状态栏）。
+```js
+UI.statusBar({ title: '通知', right: sys.icons.SETTINGS })
+```
+
+#### `UI.divider()` / `UI.hitZone({ onExit })` / `UI.swipeExit(children, fn)`
+辅助：分隔线 / 屏底退出区（一般用不到，宿主层兜底）。
+
+### 11.5 宿主层契约（你不需要做的事）
+
+dynapp_host 在动态 app 启动前已挂好：
+- 顶部 24px 状态栏（电池胶囊 / 蓝牙 / 时间），与原生 app 一致
+- 屏底 28px 透明上滑退出区（dy ≥ 30 触发回 launcher）
+
+所以：
+- **可用区是 240×268**（屏 320 减 24 状态栏减 28 退出区）
+- 业务 root panel 用 `UI.screen('id', [...])`，会自动撑满 list_root（已对齐到 24px 起）
+- **屏底 28px 不放点击元素**（会被宿主 hit zone 吞）
+
+### 11.6 用 UI 库重写 §10 的最小模板
+
+```js
+// hello.js —— 用 UI 库的版本（视觉自动对齐原生）
+var ble = makeBle("hello");
+
+VDOM.mount(UI.screen('root', [
+    UI.statusBar({ title: 'Hello' }),
+    UI.card({}, [
+        h('label', { id: 'msg', text: 'Hello, dynamic world',
+                     fg: UI.T.C_TEXT, font: 'text' })
+    ]),
+    UI.pillBtn({
+        id: 'btn', text: 'Greet PC',
+        onClick: function () {
+            ble.send('greet', { ts: sys.time.now() });
+            UI.toast('已发送', 800);
+            VDOM.set('msg', { text: '已发送，等待回复…' });
+        }
+    })
+]), null);
+sys.ui.attachRootListener('root');
+
+ble.on('reply', function (msg) {
+    UI.modal({
+        title: 'PC 回复',
+        body:  JSON.stringify(msg.body),
+        action1: '好的'
+    });
+});
+
+UI.fadeIn('root', 0);
+sys.log('hello: ready');
+```
+
+**视觉与原生 app 几乎一致**，业务逻辑仍然短小。

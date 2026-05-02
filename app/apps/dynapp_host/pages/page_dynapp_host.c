@@ -4,6 +4,9 @@
 
 #include "app_fonts.h"
 #include "app_router.h"
+#include "app_shell_ui.h"
+#include "ui_tokens.h"
+#include "ui_widgets.h"
 #include "dynamic_app.h"
 #include "dynamic_app_ui.h"
 #include "esp_log.h"
@@ -27,11 +30,6 @@ static const char *TAG = "dynapp_host";
  * 返回 launcher：屏内"返回"按钮
  * ========================================================================= */
 
-#define COLOR_BG     0x1E1B2E
-#define COLOR_ACCENT 0x06B6D4
-#define COLOR_TEXT   0xF1ECFF
-#define COLOR_MUTED  0x9B94B5
-
 #define PREPARE_TIMEOUT_MS 800
 
 typedef enum {
@@ -42,12 +40,13 @@ typedef enum {
 
 typedef struct {
     lv_obj_t *screen;
-    lv_obj_t *back_btn;
-    lv_obj_t *title_lbl;
-    lv_obj_t *list_root;
+    lv_obj_t *statusbar;       /* 24px 顶部状态栏（电池/蓝牙/时间） */
+    lv_obj_t *list_root;       /* 动态 app UI 挂载点（screen 下移 24px） */
+    lv_obj_t *hit_zone;        /* 屏底 30px 上滑退出区（统一规则） */
 
-    lv_style_t style_topbtn;
-    lv_style_t style_topbtn_pressed;
+    /* 上滑退出：自算 dy（参考 page_notifications 的做法） */
+    int       press_y0;
+    int       press_y_last;
 
     prep_state_t  state;
     lv_timer_t   *timeout_timer;
@@ -93,11 +92,9 @@ void dynapp_host_cancel_prepare_if_any(void)
         lv_obj_del(s_ui.screen);
     }
     s_ui.screen     = NULL;
-    s_ui.back_btn   = NULL;
-    s_ui.title_lbl  = NULL;
+    s_ui.statusbar  = NULL;
     s_ui.list_root  = NULL;
-    lv_style_reset(&s_ui.style_topbtn);
-    lv_style_reset(&s_ui.style_topbtn_pressed);
+    s_ui.hit_zone   = NULL;
 
     s_ui.state = PREP_IDLE;
 }
@@ -117,7 +114,8 @@ void dynapp_host_prepare_and_enter(const char *app_name)
 
     build_screen_subtree();
 
-    dynamic_app_ui_set_fonts(APP_FONT_TEXT, APP_FONT_TITLE, APP_FONT_HUGE);
+    dynamic_app_ui_set_fonts(APP_FONT_TEXT, APP_FONT_TITLE, APP_FONT_HUGE,
+                             APP_FONT_ICONS_24, APP_FONT_ICONS_36, APP_FONT_LARGE);
     dynamic_app_ui_set_root(s_ui.list_root);
 
     dynamic_app_ui_set_ready_cb(on_ready_cb, NULL);
@@ -132,64 +130,76 @@ void dynapp_host_prepare_and_enter(const char *app_name)
  * 内部
  * ========================================================================= */
 
-static void init_styles(void)
-{
-    lv_style_init(&s_ui.style_topbtn);
-    lv_style_set_bg_opa(&s_ui.style_topbtn, LV_OPA_TRANSP);
-    lv_style_set_border_width(&s_ui.style_topbtn, 0);
-    lv_style_set_shadow_width(&s_ui.style_topbtn, 0);
-    lv_style_set_text_color(&s_ui.style_topbtn, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_pad_all(&s_ui.style_topbtn, 4);
+#define HIT_ZONE_H        28      /* 屏底退出 hit zone 高度（pixel） */
+#define UPSWIPE_THRESHOLD 30      /* 累计上滑 ≥30px 视为退出意图 */
 
-    lv_style_init(&s_ui.style_topbtn_pressed);
-    lv_style_set_bg_color(&s_ui.style_topbtn_pressed, lv_color_hex(COLOR_ACCENT));
-    lv_style_set_bg_opa(&s_ui.style_topbtn_pressed, LV_OPA_20);
-}
-
-static void on_back_clicked(lv_event_t *e)
+static void on_pressed_hit(lv_event_t *e)
 {
     (void)e;
-    app_router_exit_to_launcher();
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) { s_ui.press_y0 = -1; return; }
+    lv_point_t p; lv_indev_get_point(indev, &p);
+    s_ui.press_y0     = p.y;
+    s_ui.press_y_last = p.y;
+}
+
+static void on_pressing_hit(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p; lv_indev_get_point(indev, &p);
+    s_ui.press_y_last = p.y;
+}
+
+static void on_released_hit(lv_event_t *e)
+{
+    (void)e;
+    if (s_ui.press_y0 < 0) return;
+    int dy = s_ui.press_y0 - s_ui.press_y_last;
+    s_ui.press_y0 = -1;
+    if (dy >= UPSWIPE_THRESHOLD) {
+        ESP_LOGI(TAG, "upswipe detected (dy=%d), exit to launcher", dy);
+        app_router_exit_to_launcher();
+    }
 }
 
 static void build_screen_subtree(void)
 {
-    init_styles();
-
     s_ui.screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_ui.screen, lv_color_hex(COLOR_BG), 0);
-    lv_obj_clear_flag(s_ui.screen, LV_OBJ_FLAG_SCROLLABLE);
+    ui_screen_setup(s_ui.screen);   /* iOS 浅色 */
+    s_ui.press_y0 = -1;
 
-    s_ui.back_btn = lv_btn_create(s_ui.screen);
-    lv_obj_remove_style_all(s_ui.back_btn);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn, 0);
-    lv_obj_add_style(s_ui.back_btn, &s_ui.style_topbtn_pressed, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(s_ui.back_btn, 6, 0);
-    lv_obj_set_size(s_ui.back_btn, 90, 30);
-    lv_obj_align(s_ui.back_btn, LV_ALIGN_TOP_LEFT, 10, 10);
-    lv_obj_add_event_cb(s_ui.back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
+    /* 顶部 24px 状态栏（dark=false 浅色页文字偏黑）。
+     * 默认 dark=false；若动态 app 自己用深底，状态栏文字会和底色冲突——
+     * 当前所有 prelude UI.* 都基于浅色 token，保持 false 即可。 */
+    s_ui.statusbar = app_shell_attach_statusbar(s_ui.screen, false);
 
-    lv_obj_t *arrow = lv_label_create(s_ui.back_btn);
-    lv_label_set_text(arrow, LV_SYMBOL_LEFT " 返回");
-    lv_obj_set_style_text_font(arrow, APP_FONT_TEXT, 0);
-    lv_obj_center(arrow);
-
-    s_ui.title_lbl = lv_label_create(s_ui.screen);
-    lv_label_set_text(s_ui.title_lbl, "Dynamic App");
-    lv_obj_set_style_text_color(s_ui.title_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.title_lbl, APP_FONT_TITLE, 0);
-    lv_obj_align(s_ui.title_lbl, LV_ALIGN_TOP_MID, 0, 14);
-
+    /* 动态 app 的挂载点：从 24px 起到屏底（保留 28px hit zone）。
+     * 整屏 240×320，可用区 = 320-24-28 = 268px 高。 */
     s_ui.list_root = lv_obj_create(s_ui.screen);
     lv_obj_remove_style_all(s_ui.list_root);
-    lv_obj_set_size(s_ui.list_root, 220, 250);
-    lv_obj_align(s_ui.list_root, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_size(s_ui.list_root, 240, 320 - 24 - HIT_ZONE_H);
+    lv_obj_align(s_ui.list_root, LV_ALIGN_TOP_LEFT, 0, 24);
     lv_obj_set_style_pad_all(s_ui.list_root, 0, 0);
-    lv_obj_set_style_text_color(s_ui.list_root, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_ui.list_root, APP_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(s_ui.list_root, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_ui.list_root, 0, 0);
-    lv_obj_set_scrollbar_mode(s_ui.list_root, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_clear_flag(s_ui.list_root, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 屏底 28px hit zone：透明，不可点（CLICKABLE 才能拿到 PRESSED/RELEASED）。
+     * 这是宿主层提供的"统一上滑退出"——所有动态 app 自动获得，无需 JS 处理。
+     * z-order 在 list_root 之后，确保覆盖在内容之上。 */
+    s_ui.hit_zone = lv_obj_create(s_ui.screen);
+    lv_obj_remove_style_all(s_ui.hit_zone);
+    lv_obj_set_size(s_ui.hit_zone, 240, HIT_ZONE_H);
+    lv_obj_align(s_ui.hit_zone, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(s_ui.hit_zone, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_ui.hit_zone, 0, 0);
+    lv_obj_clear_flag(s_ui.hit_zone, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_ui.hit_zone, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_ui.hit_zone, on_pressed_hit,  LV_EVENT_PRESSED,  NULL);
+    lv_obj_add_event_cb(s_ui.hit_zone, on_pressing_hit, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_ui.hit_zone, on_released_hit, LV_EVENT_RELEASED, NULL);
 }
 
 static void teardown_subtree(void)
@@ -198,12 +208,10 @@ static void teardown_subtree(void)
         lv_obj_del(s_ui.screen);
         s_ui.screen = NULL;
     }
-    s_ui.back_btn  = NULL;
-    s_ui.title_lbl = NULL;
+    s_ui.statusbar = NULL;
     s_ui.list_root = NULL;
-
-    lv_style_reset(&s_ui.style_topbtn);
-    lv_style_reset(&s_ui.style_topbtn_pressed);
+    s_ui.hit_zone  = NULL;
+    s_ui.press_y0  = -1;
 }
 
 static void on_ready_cb(void *ud)
@@ -264,7 +272,8 @@ static lv_obj_t *create(void)
 
     build_screen_subtree();
 
-    dynamic_app_ui_set_fonts(APP_FONT_TEXT, APP_FONT_TITLE, APP_FONT_HUGE);
+    dynamic_app_ui_set_fonts(APP_FONT_TEXT, APP_FONT_TITLE, APP_FONT_HUGE,
+                             APP_FONT_ICONS_24, APP_FONT_ICONS_36, APP_FONT_LARGE);
     dynamic_app_ui_set_root(s_ui.list_root);
 
     s_ui.state = PREP_COMMITTED;

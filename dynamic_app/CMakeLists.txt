@@ -9,7 +9,7 @@ idf_component_register(
         # === UI 侧三层：调度 / 注册表 / 样式 ===
         "dynamic_app_ui.c"            # 调度层：drain 分发 + 入队 API
         "dynamic_app_ui_registry.c"   # 注册表层：UTF-8 + id↔obj 映射
-        "dynamic_app_ui_styles.c"     # 样式层：apply_style 11-key 分发
+        "dynamic_app_ui_styles.c"     # 样式层：apply_style 20-key 分发
     INCLUDE_DIRS
         "."
     EMBED_TXTFILES

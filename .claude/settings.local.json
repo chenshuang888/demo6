@@ -45,7 +45,8 @@
       "Bash(sed -i 's|#include \"app_shell.h\"|#include \"app_router.h\"|' app/apps/music/pages/page_music.c app/apps/weather/pages/page_weather.c app/apps/lockscreen/pages/page_lockscreen.c app/apps/system/pages/page_system.c app/apps/dynapp_host/pages/page_dynapp_host.c app/apps/settings/settings_app.c app/apps/notifications/pages/page_notifications.c)",
       "Bash(xargs sed *)",
       "WebFetch(domain:developer.spotify.com)",
-      "WebFetch(domain:pypi.org)"
+      "WebFetch(domain:pypi.org)",
+      "Bash(grep -rn \"media: \\\\[PAUSE\\\\]\\\\|\\\\\\\\[PAUSE\\\\\\\\]\" C:/Users/ChenShuang/Desktop/esp32/demo6/services/)"
     ]
   }
 }

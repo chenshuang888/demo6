@@ -51,6 +51,12 @@ typedef enum {
     DYNAMIC_APP_UI_CMD_SET_IMAGE_SRC,
     DYNAMIC_APP_UI_CMD_ATTACH_ROOT_LISTENER,   /* 在 root 上挂一个总 cb */
     DYNAMIC_APP_UI_CMD_DESTROY,                /* 删除单个 obj 并释放 registry slot */
+
+    /* P1.5 新增：通用 UI 能力 ----------------------------------------------- */
+    DYNAMIC_APP_UI_CMD_SHOW_MODAL,             /* 弹模态卡（title + body + 2 actions） */
+    DYNAMIC_APP_UI_CMD_TOAST,                  /* 屏底 toast，dur_ms 后自动消失 */
+    DYNAMIC_APP_UI_CMD_FADE_IN,                /* 给已存在的对象做淡入动画 */
+    DYNAMIC_APP_UI_CMD_FADE_OUT_DESTROY,       /* 淡出 + 销毁（toast 内部用） */
 } dynamic_app_ui_cmd_type_t;
 
 /*
@@ -66,10 +72,21 @@ typedef enum {
     DYNAMIC_APP_STYLE_PAD,              /* a/b/c/d = left/top/right/bottom */
     DYNAMIC_APP_STYLE_BORDER_BOTTOM,   /* a = 0xRRGGBB */
     DYNAMIC_APP_STYLE_FLEX,            /* a = 0(column) / 1(row) */
-    DYNAMIC_APP_STYLE_FONT,            /* a = 0(text) / 1(title) / 2(huge) */
+    DYNAMIC_APP_STYLE_FONT,            /* a = 0(text)/1(title)/2(huge)/3(icon24)/4(icon36)/5(num_m) */
     DYNAMIC_APP_STYLE_SHADOW,          /* a = 0xRRGGBB, b = width(px), c = ofs_y(px) */
     DYNAMIC_APP_STYLE_GAP,             /* a = row_pad(px), b = col_pad(px) */
     DYNAMIC_APP_STYLE_SCROLLABLE,      /* a = 0(关) / 1(开)，默认关 */
+
+    /* P1 新增 ----------------------------------------------------------- */
+    DYNAMIC_APP_STYLE_OPA,             /* a = 0..255 整体不透明度（bg + border + text 一起） */
+    DYNAMIC_APP_STYLE_BG_OPA,          /* a = 0..255 仅背景不透明度 */
+    DYNAMIC_APP_STYLE_FLEX_GROW,       /* a = grow 系数（>=0），让该子项在 flex 容器里弹性伸展 */
+    DYNAMIC_APP_STYLE_TEXT_ALIGN,      /* a = 0(left)/1(center)/2(right) */
+    DYNAMIC_APP_STYLE_LONG_MODE,       /* label 长文本模式 a=0(wrap)/1(dot)/2(scroll)/3(clip) */
+    DYNAMIC_APP_STYLE_ROTATION,        /* a = 0.1°（LVGL 约定 0..3600），b/c = pivot xy */
+    DYNAMIC_APP_STYLE_FLEX_ALIGN,      /* a/b/c = main/cross/track 的 align id（0..5） */
+    DYNAMIC_APP_STYLE_BORDER,          /* a=color, b=width(px), c=side bitmap, d=opa(0..255) */
+    DYNAMIC_APP_STYLE_PRESSED_BG,      /* 按下态背景色：a=0xRRGGBB，b=opa（0..255） */
 } dynamic_app_style_key_t;
 
 typedef struct {
@@ -87,6 +104,20 @@ typedef struct {
             int32_t key;
             int32_t a, b, c, d;
         } style;                                          /* SET_STYLE */
+        struct {
+            uint32_t modal_id;                            /* JS 侧分配的 modal 标识（事件回传时用） */
+            char     title[64];
+            char     body[160];
+            char     action0[16];                         /* 空字符串表示无 action0 */
+            char     action1[16];
+        } modal;                                          /* SHOW_MODAL */
+        struct {
+            char     text[96];
+            uint16_t dur_ms;                              /* 0 → 1500ms 默认 */
+        } toast;                                          /* TOAST */
+        struct {
+            uint16_t delay_ms;
+        } fade;                                           /* FADE_IN（id 字段标记目标） */
     } u;
 } dynamic_app_ui_command_t;
 
@@ -98,6 +129,7 @@ typedef enum {
     DYNAMIC_APP_UI_EV_DRAG       = 3,
     DYNAMIC_APP_UI_EV_RELEASE    = 4,
     DYNAMIC_APP_UI_EV_LONG_PRESS = 5,
+    DYNAMIC_APP_UI_EV_MODAL      = 6,    /* 模态结果：dx = action 索引（0/1），-1 = 取消（点遮罩/下滑） */
 } dynamic_app_ui_event_type_t;
 
 typedef struct {
@@ -105,7 +137,8 @@ typedef struct {
     int16_t dx, dy;                                /* 仅 DRAG 用，其它事件为 0 */
     char    node_id[DYNAMIC_APP_UI_ID_MAX_LEN];    /* PRESS 时为按下对象，
                                                       DRAG/RELEASE 时为按下时记录的对象，
-                                                      CLICK 时为 LVGL 报告的 target */
+                                                      CLICK 时为 LVGL 报告的 target，
+                                                      MODAL 时为脚本传入的 modal_id 字符串形式 */
 } dynamic_app_ui_event_t;
 
 /* ---------------- 生命周期 ---------------- */
@@ -117,10 +150,16 @@ void dynamic_app_ui_unregister_all(void);
 void dynamic_app_ui_drain(int max_count);
 
 /* 由上层（page）在进入 Dynamic App 页面前注入字体指针。任意指针为 NULL 时
- * 该字体对应的 setStyle(FONT, x) 将回退到 LVGL 默认字体。 */
+ * 该字体对应的 setStyle(FONT, x) 将回退到 LVGL 默认字体。
+ *   text/title/huge ：CJK 正文/标题/巨号
+ *   icon24/icon36   ：Material Symbols 矢量图标字体
+ *   num_m           ：中号数字（lv_font_montserrat_24 之类） */
 void dynamic_app_ui_set_fonts(const lv_font_t *text,
                               const lv_font_t *title,
-                              const lv_font_t *huge);
+                              const lv_font_t *huge,
+                              const lv_font_t *icon24,
+                              const lv_font_t *icon36,
+                              const lv_font_t *num_m);
 
 /* ---------------- Script -> UI ---------------- */
 
@@ -170,6 +209,23 @@ void dynamic_app_ui_set_ready_cb(dynamic_app_ui_ready_cb_t cb, void *user_data);
  * 防御：若 JS 没递归就直接 destroy 父对象，LVGL 会级联删子对象，
  *       此时遗留 slot 会在 drain 的 lv_obj_is_valid 检查里被清。 */
 bool dynamic_app_ui_enqueue_destroy(const char *id, size_t id_len);
+
+/* 弹模态卡。
+ *   modal_id : JS 侧分配的标识（无符号整数转字符串），按钮按下时通过
+ *              EV_MODAL 事件回传，dx = action 索引（0/1）；点遮罩/下滑 dx = -1。
+ *   action0/action1 长度为 0 表示无该按钮（C 端不调 add_action）。 */
+bool dynamic_app_ui_enqueue_show_modal(uint32_t modal_id,
+                                       const char *title, size_t title_len,
+                                       const char *body,  size_t body_len,
+                                       const char *action0, size_t a0_len,
+                                       const char *action1, size_t a1_len);
+
+/* 屏底 toast：text 在屏底显示 dur_ms 后自动淡出销毁。
+ * dur_ms = 0 → 1500ms 默认。 */
+bool dynamic_app_ui_enqueue_toast(const char *text, size_t text_len, uint16_t dur_ms);
+
+/* 给已存在的对象做淡入动画（透明 0 → 全显，可选 delay）。 */
+bool dynamic_app_ui_enqueue_fade_in(const char *id, size_t id_len, uint16_t delay_ms);
 
 /* ---------------- UI -> Script ---------------- */
 

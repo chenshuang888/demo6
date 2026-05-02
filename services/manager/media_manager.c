@@ -78,15 +78,29 @@ void media_manager_process_pending(void)
         tmp.title[MEDIA_TITLE_MAX - 1]   = '\0';
         tmp.artist[MEDIA_ARTIST_MAX - 1] = '\0';
 
+        /* 检测"实质性"变化（标题/作者/播放状态）。
+         * companion 1Hz 推 NOWPLAYING 心跳，即便内容空也来——
+         * 只在真变化时打 INFO，避免日志被心跳刷屏。 */
+        bool real_change = !s_has_data
+            || (tmp.playing != s_latest.playing)
+            || (strncmp(tmp.title,  s_latest.title,  MEDIA_TITLE_MAX)  != 0)
+            || (strncmp(tmp.artist, s_latest.artist, MEDIA_ARTIST_MAX) != 0);
+
         memcpy(&s_latest, &tmp, sizeof(tmp));
         s_received_at_us = esp_timer_get_time();
         s_has_data = true;
         changed = true;
 
-        ESP_LOGI(TAG, "media: [%s] \"%s\" - \"%s\", pos=%d/%d",
-                 tmp.playing ? "PLAY" : "PAUSE",
-                 tmp.title, tmp.artist,
-                 tmp.position_sec, tmp.duration_sec);
+        if (real_change) {
+            ESP_LOGI(TAG, "media: [%s] \"%s\" - \"%s\", pos=%d/%d",
+                     tmp.playing ? "PLAY" : "PAUSE",
+                     tmp.title, tmp.artist,
+                     tmp.position_sec, tmp.duration_sec);
+        } else {
+            ESP_LOGD(TAG, "media: [%s] tick pos=%d/%d",
+                     tmp.playing ? "PLAY" : "PAUSE",
+                     tmp.position_sec, tmp.duration_sec);
+        }
     }
 
     if (changed) {

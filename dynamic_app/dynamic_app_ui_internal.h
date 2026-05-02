@@ -58,6 +58,9 @@ extern ui_registry_entry_t  s_registry[DYNAMIC_APP_UI_REGISTRY_MAX];
 extern const lv_font_t *s_font_text;
 extern const lv_font_t *s_font_title;
 extern const lv_font_t *s_font_huge;
+extern const lv_font_t *s_font_icon24;
+extern const lv_font_t *s_font_icon36;
+extern const lv_font_t *s_font_num_m;
 
 /* ============================================================================
  * §3. UTF-8 安全截断（dynamic_app_ui_registry.c 实现）

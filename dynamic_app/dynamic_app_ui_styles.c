@@ -68,7 +68,24 @@ static const lv_font_t *resolve_font(int32_t a)
         case 0: return s_font_text;
         case 1: return s_font_title;
         case 2: return s_font_huge;
+        case 3: return s_font_icon24;
+        case 4: return s_font_icon36;
+        case 5: return s_font_num_m;
         default: return s_font_text;
+    }
+}
+
+/* FLEX_ALIGN 子参数 → lv_flex_align_t */
+static lv_flex_align_t resolve_flex_align(int32_t v)
+{
+    switch (v) {
+        case 0: return LV_FLEX_ALIGN_START;
+        case 1: return LV_FLEX_ALIGN_END;
+        case 2: return LV_FLEX_ALIGN_CENTER;
+        case 3: return LV_FLEX_ALIGN_SPACE_EVENLY;
+        case 4: return LV_FLEX_ALIGN_SPACE_AROUND;
+        case 5: return LV_FLEX_ALIGN_SPACE_BETWEEN;
+        default: return LV_FLEX_ALIGN_START;
     }
 }
 
@@ -164,6 +181,94 @@ void apply_style(lv_obj_t *obj, const dynamic_app_ui_command_t *cmd)
             if (a) lv_obj_add_flag   (obj, LV_OBJ_FLAG_SCROLLABLE);
             else   lv_obj_clear_flag (obj, LV_OBJ_FLAG_SCROLLABLE);
             break;
+
+        case DYNAMIC_APP_STYLE_OPA: {
+            /* a = 0..255，整体不透明度（背景 + 边框 + 文字 + 图片一起）。
+             * LVGL 没有"主"opa，挨个 setter 一致最稳。 */
+            lv_opa_t op = (lv_opa_t)(a < 0 ? 0 : (a > 255 ? 255 : a));
+            lv_obj_set_style_opa(obj, op, 0);
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_BG_OPA: {
+            lv_opa_t op = (lv_opa_t)(a < 0 ? 0 : (a > 255 ? 255 : a));
+            lv_obj_set_style_bg_opa(obj, op, 0);
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_FLEX_GROW:
+            lv_obj_set_flex_grow(obj, (uint8_t)(a < 0 ? 0 : a));
+            break;
+
+        case DYNAMIC_APP_STYLE_TEXT_ALIGN: {
+            lv_text_align_t ta = LV_TEXT_ALIGN_LEFT;
+            if      (a == 1) ta = LV_TEXT_ALIGN_CENTER;
+            else if (a == 2) ta = LV_TEXT_ALIGN_RIGHT;
+            lv_obj_set_style_text_align(obj, ta, 0);
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_LONG_MODE: {
+            /* 仅对 label 生效；其它对象直接跳过避免 LVGL warning */
+            if (lv_obj_has_class(obj, &lv_label_class)) {
+                lv_label_long_mode_t m = LV_LABEL_LONG_WRAP;
+                if      (a == 1) m = LV_LABEL_LONG_DOT;
+                else if (a == 2) m = LV_LABEL_LONG_SCROLL;
+                else if (a == 3) m = LV_LABEL_LONG_CLIP;
+                lv_label_set_long_mode(obj, m);
+            }
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_ROTATION: {
+            /* 通用旋转（不限 image）。a = 0.1° 单位（LVGL 约定，0..3600）；
+             * b/c = pivot 相对对象左上角的 px 偏移。 */
+            lv_obj_set_style_transform_pivot_x(obj, (lv_coord_t)b, 0);
+            lv_obj_set_style_transform_pivot_y(obj, (lv_coord_t)c, 0);
+            lv_obj_set_style_transform_rotation(obj, (int32_t)a, 0);
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_FLEX_ALIGN: {
+            /* a = main, b = cross, c = track */
+            lv_obj_set_flex_align(obj,
+                                  resolve_flex_align(a),
+                                  resolve_flex_align(b),
+                                  resolve_flex_align(c));
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_BORDER: {
+            /* a = 0xRRGGBB color, b = width(px), c = side bitmap, d = opa(0..255)
+             * side bitmap：bit0=top bit1=bottom bit2=left bit3=right bit4=full
+             *              0 → 默认 FULL */
+            lv_obj_set_style_border_color(obj, lv_color_hex((uint32_t)a), 0);
+            lv_obj_set_style_border_width(obj, (lv_coord_t)(b < 0 ? 0 : b), 0);
+            lv_border_side_t side = LV_BORDER_SIDE_FULL;
+            if (c != 0) {
+                int s = 0;
+                if (c & 0x01) s |= LV_BORDER_SIDE_TOP;
+                if (c & 0x02) s |= LV_BORDER_SIDE_BOTTOM;
+                if (c & 0x04) s |= LV_BORDER_SIDE_LEFT;
+                if (c & 0x08) s |= LV_BORDER_SIDE_RIGHT;
+                if (c & 0x10) s = LV_BORDER_SIDE_FULL;
+                if (s != 0) side = (lv_border_side_t)s;
+            }
+            lv_obj_set_style_border_side(obj, side, 0);
+            int32_t op = (d <= 0) ? 255 : d;
+            if (op > 255) op = 255;
+            lv_obj_set_style_border_opa(obj, (lv_opa_t)op, 0);
+            break;
+        }
+
+        case DYNAMIC_APP_STYLE_PRESSED_BG: {
+            /* 按下态背景：a=color，b=opa（0=透明,255=不透明；0 时按 LV_OPA_30 默认） */
+            lv_obj_set_style_bg_color(obj, lv_color_hex((uint32_t)a), LV_STATE_PRESSED);
+            int32_t op = (b <= 0) ? LV_OPA_30 : b;
+            if (op > 255) op = 255;
+            lv_obj_set_style_bg_opa(obj, (lv_opa_t)op, LV_STATE_PRESSED);
+            break;
+        }
 
         default:
             ESP_LOGW(TAG, "unknown style key %d", (int)cmd->u.style.key);

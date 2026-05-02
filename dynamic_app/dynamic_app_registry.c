@@ -46,7 +46,10 @@ int dynamic_app_registry_list(dynamic_app_entry_t *out, int max)
 {
     if (!out || max <= 0) return 0;
 
-    char fs_names[8][DYNAPP_SCRIPT_STORE_MAX_NAME + 1];
+    /* 中转 buffer 容量必须 >= launcher 的 MAX_DYN_APPS（16），不然会
+     * 在调用 dynapp_script_store_list 这一层先被截断，调用方传再大的 max
+     * 也救不回来。提到 24 给未来留点裕量。 */
+    char fs_names[24][DYNAPP_SCRIPT_STORE_MAX_NAME + 1];
     int  fs_count = dynapp_script_store_list(fs_names,
                        (int)(sizeof(fs_names) / sizeof(fs_names[0])));
 

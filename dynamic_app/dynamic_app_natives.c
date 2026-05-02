@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_mqjs.h"
@@ -387,6 +388,166 @@ static JSValue js_sys_time_uptime_str(JSContext *ctx, JSValue *this_val, int arg
     char buf[16];
     snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hours % 100, minutes, seconds);
     return JS_NewString(ctx, buf);
+}
+
+/* sys.time.now() -> int  当前 unix 秒（OS 系统时间，由 NTP 或 PC 同步获得）
+ *  esp-mquickjs 没有 JS_NewInt64，而 unix 秒到 2038 之前用 int32 够；
+ *  超过 2038 后再考虑加双精度路径。 */
+static JSValue js_sys_time_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    time_t now = time(NULL);
+    return JS_NewInt32(ctx, (int32_t)now);
+}
+
+/* sys.time.parts(unix_ts) -> { y, mo, d, h, mi, s, wday, yday }
+ *   wday : 0=周日 .. 6=周六（与 struct tm 一致） */
+static JSValue js_sys_time_parts(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "sys.time.parts(unix_ts) args missing");
+    }
+    int ts32 = 0;
+    if (JS_ToInt32(ctx, &ts32, argv[0])) return JS_EXCEPTION;
+
+    time_t t = (time_t)(int32_t)ts32;
+    struct tm tm;
+    localtime_r(&t, &tm);
+
+    JSValue obj = JS_NewObject(ctx);
+    if (JS_IsException(obj)) return obj;
+    (void)JS_SetPropertyStr(ctx, obj, "y",    JS_NewInt32(ctx, tm.tm_year + 1900));
+    (void)JS_SetPropertyStr(ctx, obj, "mo",   JS_NewInt32(ctx, tm.tm_mon + 1));
+    (void)JS_SetPropertyStr(ctx, obj, "d",    JS_NewInt32(ctx, tm.tm_mday));
+    (void)JS_SetPropertyStr(ctx, obj, "h",    JS_NewInt32(ctx, tm.tm_hour));
+    (void)JS_SetPropertyStr(ctx, obj, "mi",   JS_NewInt32(ctx, tm.tm_min));
+    (void)JS_SetPropertyStr(ctx, obj, "s",    JS_NewInt32(ctx, tm.tm_sec));
+    (void)JS_SetPropertyStr(ctx, obj, "wday", JS_NewInt32(ctx, tm.tm_wday));
+    (void)JS_SetPropertyStr(ctx, obj, "yday", JS_NewInt32(ctx, tm.tm_yday));
+    return obj;
+}
+
+/* sys.time.format(unix_ts, fmt) -> string
+ *   fmt 直接传给 strftime，例如 "%Y-%m-%d %H:%M" / "%H:%M" */
+static JSValue js_sys_time_format(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "sys.time.format(ts, fmt) args missing");
+    }
+    int ts32 = 0;
+    if (JS_ToInt32(ctx, &ts32, argv[0])) return JS_EXCEPTION;
+
+    JSCStringBuf fbuf;
+    size_t flen = 0;
+    const char *fmt = JS_ToCStringLen(ctx, &flen, argv[1], &fbuf);
+    if (!fmt) return JS_EXCEPTION;
+
+    time_t t = (time_t)(int32_t)ts32;
+    struct tm tm;
+    localtime_r(&t, &tm);
+
+    char out[64];
+    size_t n = strftime(out, sizeof(out), fmt, &tm);
+    if (n == 0) out[0] = '\0';
+    return JS_NewString(ctx, out);
+}
+
+/* sys.ui.modal({ id, title?, body?, action0?, action1? })
+ *   id : 数字 modal_id（>0），由 JS 侧分配。按钮按下时通过 EV_MODAL 事件
+ *        回传，dx = 按钮索引（0/1），点遮罩/下滑 dx = -1。
+ *   action0/action1 : 字符串；缺省/空表示无该按钮。 */
+static JSValue js_sys_ui_modal(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    (void)this_val;
+    /* esp-mquickjs 没有 JS_IsObject；用 JS_IsPtr 排除原始类型，对象在 mqjs 中是 ptr。
+     * String/Function 也是 ptr 但取属性会得到 undefined，下面有兜底。 */
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0]) || !JS_IsPtr(argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.ui.modal(opts): need object");
+    }
+    JSValue opts = argv[0];
+
+    /* 取 id（必填） */
+    JSValue v_id = JS_GetPropertyStr(ctx, opts, "id");
+    int id_int = 0;
+    if (JS_ToInt32(ctx, &id_int, v_id)) {
+        return JS_ThrowTypeError(ctx, "sys.ui.modal: opts.id must be int");
+    }
+    if (id_int <= 0) {
+        return JS_ThrowTypeError(ctx, "sys.ui.modal: opts.id must be > 0");
+    }
+
+    /* 取 title/body/action0/action1（可选 string） */
+    const char *title = NULL, *body = NULL, *a0 = NULL, *a1 = NULL;
+    size_t tlen = 0, blen = 0, a0len = 0, a1len = 0;
+    JSCStringBuf tbuf, bbuf, a0buf, a1buf;
+
+    JSValue v_t = JS_GetPropertyStr(ctx, opts, "title");
+    if (JS_IsString(ctx, v_t)) title = JS_ToCStringLen(ctx, &tlen, v_t, &tbuf);
+
+    JSValue v_b = JS_GetPropertyStr(ctx, opts, "body");
+    if (JS_IsString(ctx, v_b)) body = JS_ToCStringLen(ctx, &blen, v_b, &bbuf);
+
+    JSValue v_a0 = JS_GetPropertyStr(ctx, opts, "action0");
+    if (JS_IsString(ctx, v_a0)) a0 = JS_ToCStringLen(ctx, &a0len, v_a0, &a0buf);
+
+    JSValue v_a1 = JS_GetPropertyStr(ctx, opts, "action1");
+    if (JS_IsString(ctx, v_a1)) a1 = JS_ToCStringLen(ctx, &a1len, v_a1, &a1buf);
+
+    bool ok = dynamic_app_ui_enqueue_show_modal((uint32_t)id_int,
+                                                title, tlen,
+                                                body,  blen,
+                                                a0, a0len,
+                                                a1, a1len);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+/* sys.ui.toast(text, dur_ms?)  dur_ms 默认 1500 */
+static JSValue js_sys_ui_toast(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.ui.toast(text, dur?): need string");
+    }
+    JSCStringBuf tbuf;
+    size_t tlen = 0;
+    const char *t = JS_ToCStringLen(ctx, &tlen, argv[0], &tbuf);
+    if (!t) return JS_EXCEPTION;
+
+    int dur = 0;
+    if (argc >= 2 && JS_ToInt32(ctx, &dur, argv[1])) return JS_EXCEPTION;
+    if (dur < 0) dur = 0;
+    if (dur > 10000) dur = 10000;
+
+    bool ok = dynamic_app_ui_enqueue_toast(t, tlen, (uint16_t)dur);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+/* sys.ui.fadeIn(id, delay_ms?) */
+static JSValue js_sys_ui_fade_in(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.ui.fadeIn(id, delay?): need string id");
+    }
+    JSCStringBuf ibuf;
+    size_t ilen = 0;
+    const char *id = JS_ToCStringLen(ctx, &ilen, argv[0], &ibuf);
+    if (!id) return JS_EXCEPTION;
+
+    int delay = 0;
+    if (argc >= 2 && JS_ToInt32(ctx, &delay, argv[1])) return JS_EXCEPTION;
+    if (delay < 0) delay = 0;
+    if (delay > 5000) delay = 5000;
+
+    bool ok = dynamic_app_ui_enqueue_fade_in(id, ilen, (uint16_t)delay);
+    return JS_NewBool(ok ? 1 : 0);
 }
 
 /* ============================================================================
@@ -941,6 +1102,12 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_fs_list                 = (int)base_count + 23;
     rt->func_idx_sys_ui_create_image         = (int)base_count + 24;
     rt->func_idx_sys_ui_set_image_src        = (int)base_count + 25;
+    rt->func_idx_sys_time_now                = (int)base_count + 26;
+    rt->func_idx_sys_time_parts              = (int)base_count + 27;
+    rt->func_idx_sys_time_format             = (int)base_count + 28;
+    rt->func_idx_sys_ui_modal                = (int)base_count + 29;
+    rt->func_idx_sys_ui_toast                = (int)base_count + 30;
+    rt->func_idx_sys_ui_fade_in              = (int)base_count + 31;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -969,6 +1136,12 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_fs_list,                 js_sys_fs_list,                 0);
     DEF_CFN(func_idx_sys_ui_create_image,         js_sys_ui_create_image,         3);
     DEF_CFN(func_idx_sys_ui_set_image_src,        js_sys_ui_set_image_src,        2);
+    DEF_CFN(func_idx_sys_time_now,                js_sys_time_now,                0);
+    DEF_CFN(func_idx_sys_time_parts,              js_sys_time_parts,              1);
+    DEF_CFN(func_idx_sys_time_format,             js_sys_time_format,             2);
+    DEF_CFN(func_idx_sys_ui_modal,                js_sys_ui_modal,                1);
+    DEF_CFN(func_idx_sys_ui_toast,                js_sys_ui_toast,                2);
+    DEF_CFN(func_idx_sys_ui_fade_in,              js_sys_ui_fade_in,              2);
 }
 
 #undef DEF_CFN
@@ -1015,10 +1188,16 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(ui, "setStyle",           func_idx_sys_ui_set_style);
     BIND_FN(ui, "attachRootListener", func_idx_sys_ui_attach_root_listener);
     BIND_FN(ui, "destroy",            func_idx_sys_ui_destroy);
+    BIND_FN(ui, "modal",              func_idx_sys_ui_modal);
+    BIND_FN(ui, "toast",              func_idx_sys_ui_toast);
+    BIND_FN(ui, "fadeIn",             func_idx_sys_ui_fade_in);
 
     /* sys.time.* */
     BIND_FN(time, "uptimeMs",  func_idx_sys_time_uptime_ms);
     BIND_FN(time, "uptimeStr", func_idx_sys_time_uptime_str);
+    BIND_FN(time, "now",       func_idx_sys_time_now);
+    BIND_FN(time, "parts",     func_idx_sys_time_parts);
+    BIND_FN(time, "format",    func_idx_sys_time_format);
 
     /* sys.app.* —— 持久化 */
     BIND_FN(app, "saveState",  func_idx_sys_app_save_state);
@@ -1063,6 +1242,15 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, style, "SHADOW",        JS_NewInt32(ctx, DYNAMIC_APP_STYLE_SHADOW));
     (void)JS_SetPropertyStr(ctx, style, "GAP",           JS_NewInt32(ctx, DYNAMIC_APP_STYLE_GAP));
     (void)JS_SetPropertyStr(ctx, style, "SCROLLABLE",    JS_NewInt32(ctx, DYNAMIC_APP_STYLE_SCROLLABLE));
+    (void)JS_SetPropertyStr(ctx, style, "OPA",           JS_NewInt32(ctx, DYNAMIC_APP_STYLE_OPA));
+    (void)JS_SetPropertyStr(ctx, style, "BG_OPA",        JS_NewInt32(ctx, DYNAMIC_APP_STYLE_BG_OPA));
+    (void)JS_SetPropertyStr(ctx, style, "FLEX_GROW",     JS_NewInt32(ctx, DYNAMIC_APP_STYLE_FLEX_GROW));
+    (void)JS_SetPropertyStr(ctx, style, "TEXT_ALIGN",    JS_NewInt32(ctx, DYNAMIC_APP_STYLE_TEXT_ALIGN));
+    (void)JS_SetPropertyStr(ctx, style, "LONG_MODE",     JS_NewInt32(ctx, DYNAMIC_APP_STYLE_LONG_MODE));
+    (void)JS_SetPropertyStr(ctx, style, "ROTATION",      JS_NewInt32(ctx, DYNAMIC_APP_STYLE_ROTATION));
+    (void)JS_SetPropertyStr(ctx, style, "FLEX_ALIGN",    JS_NewInt32(ctx, DYNAMIC_APP_STYLE_FLEX_ALIGN));
+    (void)JS_SetPropertyStr(ctx, style, "BORDER",        JS_NewInt32(ctx, DYNAMIC_APP_STYLE_BORDER));
+    (void)JS_SetPropertyStr(ctx, style, "PRESSED_BG",    JS_NewInt32(ctx, DYNAMIC_APP_STYLE_PRESSED_BG));
 
     /* sys.align.* —— 必须与 styles.c 的 k_align_map[] 索引一致 */
     (void)JS_SetPropertyStr(ctx, align, "TOP_LEFT",     JS_NewInt32(ctx, 0));
@@ -1076,9 +1264,12 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, align, "BOTTOM_RIGHT", JS_NewInt32(ctx, 8));
 
     /* sys.font.* */
-    (void)JS_SetPropertyStr(ctx, font, "TEXT",  JS_NewInt32(ctx, 0));
-    (void)JS_SetPropertyStr(ctx, font, "TITLE", JS_NewInt32(ctx, 1));
-    (void)JS_SetPropertyStr(ctx, font, "HUGE",  JS_NewInt32(ctx, 2));
+    (void)JS_SetPropertyStr(ctx, font, "TEXT",    JS_NewInt32(ctx, 0));
+    (void)JS_SetPropertyStr(ctx, font, "TITLE",   JS_NewInt32(ctx, 1));
+    (void)JS_SetPropertyStr(ctx, font, "HUGE",    JS_NewInt32(ctx, 2));
+    (void)JS_SetPropertyStr(ctx, font, "ICON_24", JS_NewInt32(ctx, 3));
+    (void)JS_SetPropertyStr(ctx, font, "ICON_36", JS_NewInt32(ctx, 4));
+    (void)JS_SetPropertyStr(ctx, font, "NUM_M",   JS_NewInt32(ctx, 5));
 
     /* 装配 sys */
     BIND_FN(sys, "log", func_idx_sys_log);
@@ -1091,6 +1282,63 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, sys, "style",   style);
     (void)JS_SetPropertyStr(ctx, sys, "align",   align);
     (void)JS_SetPropertyStr(ctx, sys, "font",    font);
+
+    /* sys.icons.* —— Material Symbols Rounded 字符（UTF-8）。
+     * label 的 font 必须是 sys.font.ICON_24 / ICON_14 才能正确渲染。
+     * 与 app/app_fonts.h 的 ICON_* 宏保持一致。 */
+    JSValue icons = JS_NewObject(ctx);
+    (void)JS_SetPropertyStr(ctx, icons, "BLUETOOTH",     JS_NewString(ctx, "\xEE\x86\xA7"));
+    (void)JS_SetPropertyStr(ctx, icons, "BT_DISABLED",   JS_NewString(ctx, "\xEE\x86\xA8"));
+    (void)JS_SetPropertyStr(ctx, icons, "SCHEDULE",      JS_NewString(ctx, "\xEE\xA2\xB5"));
+    (void)JS_SetPropertyStr(ctx, icons, "WEATHER",       JS_NewString(ctx, "\xEF\x85\xB2"));
+    (void)JS_SetPropertyStr(ctx, icons, "NOTIFICATIONS", JS_NewString(ctx, "\xEE\x9F\xB4"));
+    (void)JS_SetPropertyStr(ctx, icons, "MUSIC",         JS_NewString(ctx, "\xEE\x90\x85"));
+    (void)JS_SetPropertyStr(ctx, icons, "TUNE",          JS_NewString(ctx, "\xEE\x90\xA9"));
+    (void)JS_SetPropertyStr(ctx, icons, "SETTINGS",      JS_NewString(ctx, "\xEE\xA2\xB8"));
+    (void)JS_SetPropertyStr(ctx, icons, "BRIGHTNESS",    JS_NewString(ctx, "\xEE\x86\xA9"));
+    (void)JS_SetPropertyStr(ctx, icons, "INFO",          JS_NewString(ctx, "\xEE\xA2\x8E"));
+    (void)JS_SetPropertyStr(ctx, icons, "EDIT_CALENDAR", JS_NewString(ctx, "\xEE\x95\x96"));
+    (void)JS_SetPropertyStr(ctx, icons, "APPS",          JS_NewString(ctx, "\xEE\x97\x83"));
+    (void)JS_SetPropertyStr(ctx, icons, "CHEVRON_LEFT",  JS_NewString(ctx, "\xEE\x97\x8B"));
+    (void)JS_SetPropertyStr(ctx, icons, "CHEVRON_RIGHT", JS_NewString(ctx, "\xEE\x97\x8C"));
+    (void)JS_SetPropertyStr(ctx, icons, "DOT",           JS_NewString(ctx, "\xEE\xBD\x8A"));
+    (void)JS_SetPropertyStr(ctx, icons, "DOT_SMALL",     JS_NewString(ctx, "\xEE\x81\xA1"));
+    (void)JS_SetPropertyStr(ctx, sys, "icons", icons);
+
+    /* sys.tokens.* —— 与 app/ui/ui_tokens.h 同步的设计 token。
+     * 颜色用 0xRRGGBB 整数；间距/圆角/动画时长用 px/ms。 */
+    JSValue tokens = JS_NewObject(ctx);
+    /* 颜色（iOS 浅色） */
+    (void)JS_SetPropertyStr(ctx, tokens, "C_BG",         JS_NewInt32(ctx, 0xF2F2F7));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_PANEL",      JS_NewInt32(ctx, 0xFFFFFF));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_PANEL_HI",   JS_NewInt32(ctx, 0xE5E5EA));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_BORDER",     JS_NewInt32(ctx, 0xC6C6C8));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_TEXT",       JS_NewInt32(ctx, 0x000000));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_TEXT_DIM",   JS_NewInt32(ctx, 0x3C3C43));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_TEXT_MUTED", JS_NewInt32(ctx, 0x6E6E73));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_ACCENT",     JS_NewInt32(ctx, 0x007AFF));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_ACCENT_2",   JS_NewInt32(ctx, 0xAF52DE));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_OK",         JS_NewInt32(ctx, 0x34C759));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_WARN",       JS_NewInt32(ctx, 0xFF9500));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_ERR",        JS_NewInt32(ctx, 0xFF3B30));
+    (void)JS_SetPropertyStr(ctx, tokens, "C_INFO",       JS_NewInt32(ctx, 0x5AC8FA));
+    /* 间距（8 倍数体系） */
+    (void)JS_SetPropertyStr(ctx, tokens, "SP_XS",  JS_NewInt32(ctx, 4));
+    (void)JS_SetPropertyStr(ctx, tokens, "SP_SM",  JS_NewInt32(ctx, 8));
+    (void)JS_SetPropertyStr(ctx, tokens, "SP_MD",  JS_NewInt32(ctx, 12));
+    (void)JS_SetPropertyStr(ctx, tokens, "SP_LG",  JS_NewInt32(ctx, 16));
+    (void)JS_SetPropertyStr(ctx, tokens, "SP_XL",  JS_NewInt32(ctx, 24));
+    (void)JS_SetPropertyStr(ctx, tokens, "SP_2XL", JS_NewInt32(ctx, 32));
+    /* 圆角 */
+    (void)JS_SetPropertyStr(ctx, tokens, "R_SM",   JS_NewInt32(ctx, 6));
+    (void)JS_SetPropertyStr(ctx, tokens, "R_MD",   JS_NewInt32(ctx, 10));
+    (void)JS_SetPropertyStr(ctx, tokens, "R_LG",   JS_NewInt32(ctx, 14));
+    (void)JS_SetPropertyStr(ctx, tokens, "R_PILL", JS_NewInt32(ctx, 1000));
+    /* 动画时长 */
+    (void)JS_SetPropertyStr(ctx, tokens, "DUR_FAST", JS_NewInt32(ctx, 150));
+    (void)JS_SetPropertyStr(ctx, tokens, "DUR_NORM", JS_NewInt32(ctx, 250));
+    (void)JS_SetPropertyStr(ctx, tokens, "DUR_SLOW", JS_NewInt32(ctx, 400));
+    (void)JS_SetPropertyStr(ctx, sys, "tokens", tokens);
 
     /* 挂到全局 */
     (void)JS_SetPropertyStr(ctx, sys, "__setDispatcher",

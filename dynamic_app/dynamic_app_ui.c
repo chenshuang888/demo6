@@ -27,6 +27,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "esp_log.h"
 
@@ -44,9 +45,12 @@ volatile lv_obj_t   *s_root        = NULL;
 ui_registry_entry_t  s_registry[DYNAMIC_APP_UI_REGISTRY_MAX];
 
 /* 字体由 page 通过 set_fonts 注入，避免本组件反向依赖 app 层 */
-const lv_font_t *s_font_text  = NULL;
-const lv_font_t *s_font_title = NULL;
-const lv_font_t *s_font_huge  = NULL;
+const lv_font_t *s_font_text   = NULL;
+const lv_font_t *s_font_title  = NULL;
+const lv_font_t *s_font_huge   = NULL;
+const lv_font_t *s_font_icon24 = NULL;
+const lv_font_t *s_font_icon36 = NULL;
+const lv_font_t *s_font_num_m  = NULL;
 
 /* 当前手势会话状态（同时只有一根手指，单 indev 假设）。
  * 在 root listener 的 PRESSED 中记录，PRESSING 累计位移，
@@ -61,6 +65,13 @@ static struct {
  * 用于宿主页判断"脚本已经把对象树搭完，可以提交给 router 切屏"。 */
 static dynamic_app_ui_ready_cb_t s_ready_cb       = NULL;
 static void                     *s_ready_cb_ud   = NULL;
+
+/* 模态状态（实际使用在文件后半段；提前声明便于 unregister_all 清理） */
+static struct {
+    lv_obj_t *overlay;
+    uint32_t  modal_id;
+} s_modal = { 0 };
+static int s_modal_press_y0 = -1;
 
 /* ============================================================================
  * §2. 生命周期
@@ -94,6 +105,11 @@ void dynamic_app_ui_unregister_all(void)
     s_gesture.active_target = NULL;
     s_gesture.active_id[0] = '\0';
     s_gesture.acc_dx = s_gesture.acc_dy = 0;
+    /* modal/toast 也归零：lvgl 对象会随 screen 一起被级联删除，
+     * 这里只把 C 端跟踪指针清掉，避免下次进 app 误用悬挂指针 */
+    s_modal.overlay  = NULL;
+    s_modal.modal_id = 0;
+    s_modal_press_y0 = -1;
     dynamic_app_ui_clear_event_queue();
     /* prepare 中途取消时，没机会触发 ready_cb，这里强清避免下次误触发 */
     s_ready_cb    = NULL;
@@ -117,11 +133,17 @@ void dynamic_app_ui_set_ready_cb(dynamic_app_ui_ready_cb_t cb, void *user_data)
 
 void dynamic_app_ui_set_fonts(const lv_font_t *text,
                               const lv_font_t *title,
-                              const lv_font_t *huge)
+                              const lv_font_t *huge,
+                              const lv_font_t *icon24,
+                              const lv_font_t *icon36,
+                              const lv_font_t *num_m)
 {
-    s_font_text  = text;
-    s_font_title = title;
-    s_font_huge  = huge;
+    s_font_text   = text;
+    s_font_title  = title;
+    s_font_huge   = huge;
+    s_font_icon24 = icon24;
+    s_font_icon36 = icon36;
+    s_font_num_m  = num_m;
 }
 
 /* ============================================================================
@@ -255,6 +277,51 @@ bool dynamic_app_ui_enqueue_destroy(const char *id, size_t id_len)
     dynamic_app_ui_command_t cmd = {0};
     cmd.type = DYNAMIC_APP_UI_CMD_DESTROY;
     utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_show_modal(uint32_t modal_id,
+                                       const char *title, size_t title_len,
+                                       const char *body,  size_t body_len,
+                                       const char *action0, size_t a0_len,
+                                       const char *action1, size_t a1_len)
+{
+    if (!s_ui_queue) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_SHOW_MODAL;
+    cmd.u.modal.modal_id = modal_id;
+    if (title)   utf8_copy_trunc(cmd.u.modal.title,   sizeof(cmd.u.modal.title),   title,   title_len);
+    if (body)    utf8_copy_trunc(cmd.u.modal.body,    sizeof(cmd.u.modal.body),    body,    body_len);
+    if (action0) utf8_copy_trunc(cmd.u.modal.action0, sizeof(cmd.u.modal.action0), action0, a0_len);
+    if (action1) utf8_copy_trunc(cmd.u.modal.action1, sizeof(cmd.u.modal.action1), action1, a1_len);
+
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_toast(const char *text, size_t text_len, uint16_t dur_ms)
+{
+    if (!s_ui_queue || !text) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_TOAST;
+    utf8_copy_trunc(cmd.u.toast.text, sizeof(cmd.u.toast.text), text, text_len);
+    cmd.u.toast.dur_ms = dur_ms;
+
+    if (cmd.u.toast.text[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_fade_in(const char *id, size_t id_len, uint16_t delay_ms)
+{
+    if (!s_ui_queue || !id) return false;
+
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_FADE_IN;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    cmd.u.fade.delay_ms = delay_ms;
 
     if (cmd.id[0] == '\0') return false;
     return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
@@ -497,6 +564,285 @@ static void do_set_image_src(lv_obj_t *obj, const char *src)
     lv_image_set_src(obj, path);
 }
 
+/* ============================================================================
+ * Modal / Toast / Fade-in（自包含 LVGL 实现，避免组件循环依赖 app）
+ * ========================================================================= */
+
+#define MODAL_W       224
+#define MODAL_MAX_H   270
+#define MODAL_PAD     12
+#define TOKEN_PANEL   0xFFFFFF
+#define TOKEN_BG      0xF2F2F7
+#define TOKEN_BORDER  0xC6C6C8
+#define TOKEN_TEXT    0x000000
+#define TOKEN_DIM     0x3C3C43
+#define TOKEN_MUTED   0x6E6E73
+#define TOKEN_ACCENT  0x007AFF
+
+/* 当前活动 modal 的 modal_id（实际状态定义在文件顶部 s_modal / s_modal_press_y0）。
+ * 同时只有一个 modal，新弹出会先关旧的。 */
+
+/* 把 uint32_t modal_id 写成字符串，事件队列回 JS */
+static void modal_emit(int8_t action_idx)
+{
+    if (!s_event_queue || !s_modal.overlay) return;
+    dynamic_app_ui_event_t ev = {0};
+    ev.type = DYNAMIC_APP_UI_EV_MODAL;
+    ev.dx   = (int16_t)action_idx;
+    snprintf(ev.node_id, sizeof(ev.node_id), "%u",
+             (unsigned)s_modal.modal_id);
+    (void)xQueueSend(s_event_queue, &ev, 0);
+}
+
+static void modal_destroy(void)
+{
+    if (s_modal.overlay) {
+        lv_obj_del(s_modal.overlay);
+        s_modal.overlay = NULL;
+    }
+    s_modal.modal_id = 0;
+}
+
+static void on_modal_overlay_clicked(lv_event_t *e)
+{
+    lv_obj_t *target = lv_event_get_target_obj(e);
+    if (target != s_modal.overlay) return;   /* 只点遮罩自己才关 */
+    modal_emit(-1);
+    modal_destroy();
+}
+
+static void on_modal_action_clicked(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    modal_emit((int8_t)idx);
+    modal_destroy();
+}
+
+/* y 方向滑出关闭的状态在文件顶部 s_modal_press_y0 */
+
+static void on_modal_card_pressed(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *id = lv_indev_active();
+    if (!id) { s_modal_press_y0 = -1; return; }
+    lv_point_t p; lv_indev_get_point(id, &p);
+    s_modal_press_y0 = p.y;
+}
+
+static void on_modal_card_released(lv_event_t *e)
+{
+    (void)e;
+    if (s_modal_press_y0 < 0) return;
+    lv_indev_t *id = lv_indev_active();
+    if (!id) { s_modal_press_y0 = -1; return; }
+    lv_point_t p; lv_indev_get_point(id, &p);
+    int dy = p.y - s_modal_press_y0;
+    s_modal_press_y0 = -1;
+    if (dy >= 30) {   /* 下滑关闭 */
+        modal_emit(-1);
+        modal_destroy();
+    }
+}
+
+static void do_show_modal(const dynamic_app_ui_command_t *cmd)
+{
+    /* 已有 modal：先发"取消"事件再清理 */
+    if (s_modal.overlay) {
+        modal_emit(-1);
+        modal_destroy();
+    }
+
+    lv_obj_t *parent = lv_screen_active();
+    if (!parent) return;
+
+    s_modal.overlay = lv_obj_create(parent);
+    s_modal.modal_id = cmd->u.modal.modal_id;
+    lv_obj_remove_style_all(s_modal.overlay);
+    lv_obj_set_size(s_modal.overlay, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(s_modal.overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_modal.overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa  (s_modal.overlay, LV_OPA_60, 0);
+    lv_obj_clear_flag(s_modal.overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag  (s_modal.overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_modal.overlay, on_modal_overlay_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *card = lv_obj_create(s_modal.overlay);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, MODAL_W);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(card, MODAL_MAX_H, 0);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(TOKEN_PANEL), 0);
+    lv_obj_set_style_bg_opa  (card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius  (card, 14, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(TOKEN_BORDER), 0);
+    lv_obj_set_style_pad_all(card, MODAL_PAD, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(card, 8, 0);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(card, on_modal_card_pressed,  LV_EVENT_PRESSED,  NULL);
+    lv_obj_add_event_cb(card, on_modal_card_released, LV_EVENT_RELEASED, NULL);
+
+    /* title（可选） */
+    if (cmd->u.modal.title[0]) {
+        lv_obj_t *t = lv_label_create(card);
+        lv_label_set_text(t, cmd->u.modal.title);
+        lv_obj_set_width(t, LV_PCT(100));
+        lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(t, lv_color_hex(TOKEN_TEXT), 0);
+        if (s_font_title) lv_obj_set_style_text_font(t, s_font_title, 0);
+    }
+
+    /* body（可选） */
+    if (cmd->u.modal.body[0]) {
+        lv_obj_t *b = lv_label_create(card);
+        lv_label_set_text(b, cmd->u.modal.body);
+        lv_obj_set_width(b, LV_PCT(100));
+        lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(b, lv_color_hex(TOKEN_DIM), 0);
+        if (s_font_text) lv_obj_set_style_text_font(b, s_font_text, 0);
+    }
+
+    /* 按钮栏 */
+    bool has_a0 = cmd->u.modal.action0[0] != '\0';
+    bool has_a1 = cmd->u.modal.action1[0] != '\0';
+    if (has_a0 || has_a1) {
+        lv_obj_t *bar = lv_obj_create(card);
+        lv_obj_remove_style_all(bar);
+        lv_obj_set_size(bar, LV_PCT(100), 44);
+        lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_EVENLY,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(bar, 8, 0);
+        lv_obj_set_style_pad_top(bar, 4, 0);
+
+        const char *labels[2] = { cmd->u.modal.action0, cmd->u.modal.action1 };
+        for (int i = 0; i < 2; i++) {
+            if (!labels[i][0]) continue;
+            lv_obj_t *btn = lv_btn_create(bar);
+            lv_obj_remove_style_all(btn);
+            lv_obj_set_height(btn, 32);
+            lv_obj_set_flex_grow(btn, 1);
+            lv_obj_set_style_radius(btn, 1000, 0);
+            /* 0=次按钮（灰底黑字），1=主按钮（蓝底白字）*/
+            bool is_primary = (i == 1) || !has_a1;
+            if (is_primary) {
+                lv_obj_set_style_bg_color(btn, lv_color_hex(TOKEN_ACCENT), 0);
+                lv_obj_set_style_bg_opa  (btn, LV_OPA_COVER, 0);
+            } else {
+                lv_obj_set_style_bg_color(btn, lv_color_hex(TOKEN_BG), 0);
+                lv_obj_set_style_bg_opa  (btn, LV_OPA_COVER, 0);
+                lv_obj_set_style_border_width(btn, 1, 0);
+                lv_obj_set_style_border_color(btn, lv_color_hex(TOKEN_BORDER), 0);
+            }
+            lv_obj_set_style_bg_opa(btn, LV_OPA_70, LV_STATE_PRESSED);
+            lv_obj_add_event_cb(btn, on_modal_action_clicked,
+                                LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+            lv_obj_t *lbl = lv_label_create(btn);
+            lv_label_set_text(lbl, labels[i]);
+            lv_obj_set_style_text_color(lbl,
+                is_primary ? lv_color_hex(TOKEN_PANEL) : lv_color_hex(TOKEN_TEXT), 0);
+            if (s_font_title) lv_obj_set_style_text_font(lbl, s_font_title, 0);
+            lv_obj_center(lbl);
+        }
+    }
+
+    /* 淡入动画 */
+    lv_obj_set_style_opa(s_modal.overlay, LV_OPA_TRANSP, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_modal.overlay);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&a, 150);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+    lv_anim_start(&a);
+}
+
+/* ---- toast：屏底 1500ms 自动消失 ---- */
+
+static void toast_anim_end_cb(lv_anim_t *a)
+{
+    lv_obj_t *obj = (lv_obj_t *)a->var;
+    if (obj && lv_obj_is_valid(obj)) lv_obj_del(obj);
+}
+
+static void toast_dismiss_timer_cb(lv_timer_t *t)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_timer_get_user_data(t);
+    lv_timer_del(t);
+    if (!obj || !lv_obj_is_valid(obj)) return;
+    /* 淡出后销毁 */
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&a, 200);
+    lv_anim_set_exec_cb (&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+    lv_anim_set_completed_cb(&a, toast_anim_end_cb);
+    lv_anim_start(&a);
+}
+
+static void do_toast(const dynamic_app_ui_command_t *cmd)
+{
+    lv_obj_t *parent = lv_screen_active();
+    if (!parent) return;
+
+    lv_obj_t *t = lv_obj_create(parent);
+    lv_obj_remove_style_all(t);
+    lv_obj_set_size(t, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(t, 200, 0);
+    lv_obj_align(t, LV_ALIGN_BOTTOM_MID, 0, -50);
+    lv_obj_set_style_bg_color(t, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_bg_opa  (t, LV_OPA_80, 0);
+    lv_obj_set_style_radius  (t, 1000, 0);
+    lv_obj_set_style_pad_hor (t, 16, 0);
+    lv_obj_set_style_pad_ver (t, 8, 0);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(t);
+    lv_label_set_text(lbl, cmd->u.toast.text);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(TOKEN_PANEL), 0);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    if (s_font_text) lv_obj_set_style_text_font(lbl, s_font_text, 0);
+
+    /* 淡入 */
+    lv_obj_set_style_opa(t, LV_OPA_TRANSP, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, t);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&a, 150);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+    lv_anim_start(&a);
+
+    /* 自动消失 timer */
+    uint32_t dur = cmd->u.toast.dur_ms ? cmd->u.toast.dur_ms : 1500;
+    lv_timer_t *tm = lv_timer_create(toast_dismiss_timer_cb, dur, t);
+    lv_timer_set_repeat_count(tm, 1);
+}
+
+/* ---- fade in：给已存在的对象做 opa 0→cover ---- */
+
+static void do_fade_in(lv_obj_t *obj, uint16_t delay_ms)
+{
+    if (!obj || !lv_obj_is_valid(obj)) return;
+    lv_obj_set_style_opa(obj, LV_OPA_TRANSP, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&a, 250);
+    lv_anim_set_delay   (&a, delay_ms);
+    lv_anim_set_exec_cb (&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+    lv_anim_start(&a);
+}
+
 void dynamic_app_ui_drain(int max_count)
 {
     if (!s_ui_queue || max_count <= 0) return;
@@ -620,6 +966,26 @@ void dynamic_app_ui_drain(int max_count)
                 s_registry[slot].used = false;
                 s_registry[slot].obj = NULL;
                 s_registry[slot].id[0] = '\0';
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_SHOW_MODAL:
+                do_show_modal(&cmd);
+                break;
+
+            case DYNAMIC_APP_UI_CMD_TOAST:
+                do_toast(&cmd);
+                break;
+
+            case DYNAMIC_APP_UI_CMD_FADE_IN: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0) break;
+                lv_obj_t *obj = s_registry[slot].obj;
+                if (obj && lv_obj_is_valid(obj)) {
+                    do_fade_in(obj, cmd.u.fade.delay_ms);
+                } else {
+                    s_registry[slot].obj = NULL;
+                }
                 break;
             }
 
