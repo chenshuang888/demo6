@@ -36,6 +36,7 @@ typedef enum {
     UI_OBJ_PANEL,
     UI_OBJ_BUTTON,
     UI_OBJ_IMAGE,
+    UI_OBJ_CANVAS,
 } ui_obj_type_t;
 
 /* 注册表项：JS 用字符串 id 索引，C 端持有 LVGL 对象指针 */
@@ -44,6 +45,10 @@ typedef struct {
     ui_obj_type_t type;
     char id[DYNAMIC_APP_UI_ID_MAX_LEN];
     lv_obj_t *obj;
+    /* 类型相关的额外资源；销毁时按 type 释放：
+     *   UI_OBJ_CANVAS → uint8_t* RGB565 buffer (240×320×2 = 153600B in PSRAM)
+     * 其它 type 暂时为 NULL。 */
+    void *aux;
 } ui_registry_entry_t;
 
 /* ============================================================================

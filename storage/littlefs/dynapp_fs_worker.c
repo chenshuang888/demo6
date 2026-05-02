@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -42,6 +43,7 @@ static const char *TAG = "dynapp_fs";
 typedef enum {
     FS_OP_USER_WRITE = 1,
     FS_OP_USER_REMOVE,
+    FS_OP_USER_WRITE_LARGE,   /* 大块用户数据写：data 指针由 worker free */
     FS_OP_WRITER_OPEN,
     FS_OP_WRITER_APPEND,
     FS_OP_WRITER_COMMIT,
@@ -59,6 +61,12 @@ typedef struct {
             uint16_t len;
             uint8_t  data[FS_CHUNK_MAX_BYTES];
         } user_write;
+        struct {
+            char     app_id[DYNAPP_SCRIPT_STORE_MAX_NAME + 1];
+            char     relpath[DYNAPP_USER_DATA_MAX_PATH + 1];
+            uint8_t *data;       /* malloc 出来，worker 处理后 free */
+            size_t   len;
+        } user_write_large;
         struct {
             char app_id[DYNAPP_SCRIPT_STORE_MAX_NAME + 1];
             char relpath[DYNAPP_USER_DATA_MAX_PATH + 1];
@@ -120,6 +128,39 @@ bool dynapp_fs_worker_submit_user_write(const char *app_id, const char *relpath,
     it.user_write.len = (uint16_t)len;
     memcpy(it.user_write.data, data, len);
     return send_item(&it);
+}
+
+bool dynapp_fs_worker_submit_user_write_large(const char *app_id,
+                                               const char *relpath,
+                                               const uint8_t *data, size_t len)
+{
+    if (!app_id || !relpath || !data) return false;
+    if (len == 0 || len > DYNAPP_USER_DATA_MAX_BYTES) return false;
+    if (strlen(app_id)  > DYNAPP_SCRIPT_STORE_MAX_NAME) return false;
+    if (strlen(relpath) > DYNAPP_USER_DATA_MAX_PATH)    return false;
+
+    /* 拷贝到 PSRAM（256KB 不能放栈，也不该让上层 buffer 受 worker 处理时机牵制） */
+    uint8_t *copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) {
+        copy = (uint8_t *)malloc(len);   /* PSRAM 不可用时降级到 internal heap */
+    }
+    if (!copy) {
+        ESP_LOGE(TAG, "user_write_large alloc %u failed", (unsigned)len);
+        return false;
+    }
+    memcpy(copy, data, len);
+
+    fs_item_t it = { .op = FS_OP_USER_WRITE_LARGE };
+    strncpy(it.user_write_large.app_id,  app_id,  sizeof(it.user_write_large.app_id)  - 1);
+    strncpy(it.user_write_large.relpath, relpath, sizeof(it.user_write_large.relpath) - 1);
+    it.user_write_large.data = copy;
+    it.user_write_large.len  = len;
+    if (!send_item(&it)) {
+        ESP_LOGW(TAG, "user_write_large queue full, dropping (%uB)", (unsigned)len);
+        free(copy);
+        return false;
+    }
+    return true;
 }
 
 bool dynapp_fs_worker_submit_user_remove(const char *app_id, const char *relpath)
@@ -215,6 +256,21 @@ static void dispatch_user_write(const fs_item_t *it)
     }
 }
 
+static void dispatch_user_write_large(fs_item_t *it)
+{
+    esp_err_t e = dynapp_user_data_write(it->user_write_large.app_id,
+                                          it->user_write_large.relpath,
+                                          it->user_write_large.data,
+                                          it->user_write_large.len);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "user_write_large %s/%s err=0x%x (len=%u)",
+                 it->user_write_large.app_id, it->user_write_large.relpath,
+                 e, (unsigned)it->user_write_large.len);
+    }
+    free(it->user_write_large.data);
+    it->user_write_large.data = NULL;
+}
+
 static void dispatch_user_remove(const fs_item_t *it)
 {
     esp_err_t e = dynapp_user_data_remove(it->user_remove.app_id,
@@ -307,14 +363,15 @@ static void worker_task(void *arg)
     for (;;) {
         if (xQueueReceive(s_queue, &it, portMAX_DELAY) != pdTRUE) continue;
         switch (it.op) {
-        case FS_OP_USER_WRITE:    dispatch_user_write(&it);   break;
-        case FS_OP_USER_REMOVE:   dispatch_user_remove(&it);  break;
-        case FS_OP_WRITER_OPEN:   dispatch_writer_open(&it);  break;
-        case FS_OP_WRITER_APPEND: dispatch_writer_append(&it); break;
-        case FS_OP_WRITER_COMMIT: dispatch_writer_commit(&it); break;
-        case FS_OP_WRITER_ABORT:  dispatch_writer_abort();    break;
-        case FS_OP_APP_DELETE:    dispatch_app_delete(&it);   break;
-        case FS_OP_LIST_APPS:     dispatch_list_apps(&it);    break;
+        case FS_OP_USER_WRITE:        dispatch_user_write(&it);       break;
+        case FS_OP_USER_REMOVE:       dispatch_user_remove(&it);      break;
+        case FS_OP_USER_WRITE_LARGE:  dispatch_user_write_large(&it); break;
+        case FS_OP_WRITER_OPEN:       dispatch_writer_open(&it);      break;
+        case FS_OP_WRITER_APPEND:     dispatch_writer_append(&it);    break;
+        case FS_OP_WRITER_COMMIT:     dispatch_writer_commit(&it);    break;
+        case FS_OP_WRITER_ABORT:      dispatch_writer_abort();        break;
+        case FS_OP_APP_DELETE:        dispatch_app_delete(&it);       break;
+        case FS_OP_LIST_APPS:         dispatch_list_apps(&it);        break;
         default:
             ESP_LOGW(TAG, "unknown op %d", (int)it.op);
             break;

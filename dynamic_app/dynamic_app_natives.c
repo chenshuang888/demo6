@@ -836,7 +836,9 @@ static JSValue js_sys_fs_read(JSContext *ctx, JSValue *this_val,
     return v;
 }
 
-/* sys.fs.write(path, content) -> bool   入队即 true，失败只 log */
+/* sys.fs.write(path, content) -> bool   入队即 true，失败只 log
+ *   ≤ 196B 走单帧老路径；> 196B 走 large 路径（worker 内部拷贝 PSRAM）。
+ *   上限 DYNAPP_USER_DATA_MAX_BYTES (256KB)。 */
 static JSValue js_sys_fs_write(JSContext *ctx, JSValue *this_val,
                                int argc, JSValue *argv)
 {
@@ -854,8 +856,13 @@ static JSValue js_sys_fs_write(JSContext *ctx, JSValue *this_val,
     const char *c = JS_ToCStringLen(ctx, &clen, argv[1], &cbuf);
     if (!c) return JS_EXCEPTION;
 
-    /* 入队的 chunk 上限 196B；超过的拒掉（MVP 限制，后续可改成大文件分段） */
-    bool ok = dynapp_fs_worker_submit_user_write(app, p, (const uint8_t *)c, clen);
+    bool ok;
+    if (clen <= 196) {
+        ok = dynapp_fs_worker_submit_user_write(app, p, (const uint8_t *)c, clen);
+    } else {
+        ok = dynapp_fs_worker_submit_user_write_large(app, p,
+                                                       (const uint8_t *)c, clen);
+    }
     if (!ok) ESP_LOGW(TAG, "fs.write: queue refused or oversize (%u B)", (unsigned)clen);
     return JS_NewBool(ok ? 1 : 0);
 }
@@ -914,6 +921,141 @@ static JSValue js_sys_fs_list(JSContext *ctx, JSValue *this_val,
         (void)JS_SetPropertyUint32(ctx, arr, (uint32_t)i, s);
     }
     return arr;
+}
+
+/* ============================================================================
+ * §5e. JS Native：sys.canvas.* （像素级绘图 + 文件互转）
+ *
+ *   - create(id, parent, w?, h?)：默认 240×320 RGB565 in PSRAM
+ *   - fill / setPixel / line：纯 buffer 操作 + lv_obj_invalidate
+ *   - saveTo(id, relpath)：把 buffer dump 到 data/<rel>，走 fs_worker
+ *     大块路径（worker 内拷贝 PSRAM 一份再串行落盘，调用即返）
+ *   - loadFrom(id, relpath)：同步 read_file 到 buffer + invalidate
+ *
+ * 参数都从 JS 拿 int / string，错误返回 false（透明降级）。
+ * ========================================================================= */
+
+static JSValue js_sys_canvas_create(JSContext *ctx, JSValue *this_val,
+                                    int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 1) return JS_ThrowTypeError(ctx,
+        "sys.canvas.create(id, parent?, w?, h?): id missing");
+
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+
+    parent_str_t ph;
+    const char *pid = NULL;
+    size_t plen = 0;
+    if (argc >= 2 && !extract_parent_id(ctx, argv[1], &pid, &plen, &ph)) {
+        return JS_EXCEPTION;
+    }
+
+    int w = 0, h = 0;
+    if (argc >= 3 && JS_ToInt32(ctx, &w, argv[2])) return JS_EXCEPTION;
+    if (argc >= 4 && JS_ToInt32(ctx, &h, argv[3])) return JS_EXCEPTION;
+    if (w < 0) w = 0;
+    if (h < 0) h = 0;
+
+    bool ok = dynamic_app_ui_enqueue_create_canvas(id, id_len, pid, plen,
+                                                     (uint16_t)w, (uint16_t)h);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+static JSValue js_sys_canvas_fill(JSContext *ctx, JSValue *this_val,
+                                   int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 2) return JS_ThrowTypeError(ctx,
+        "sys.canvas.fill(id, color): args missing");
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+    int color = 0;
+    if (JS_ToInt32(ctx, &color, argv[1])) return JS_EXCEPTION;
+    bool ok = dynamic_app_ui_enqueue_canvas_fill(id, id_len, (uint32_t)color);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+static JSValue js_sys_canvas_pixel(JSContext *ctx, JSValue *this_val,
+                                    int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 4) return JS_ThrowTypeError(ctx,
+        "sys.canvas.setPixel(id, x, y, color): args missing");
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+    int x = 0, y = 0, color = 0;
+    if (JS_ToInt32(ctx, &x,     argv[1])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &y,     argv[2])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &color, argv[3])) return JS_EXCEPTION;
+    bool ok = dynamic_app_ui_enqueue_canvas_pixel(id, id_len,
+                                                    (int16_t)x, (int16_t)y,
+                                                    (uint32_t)color);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+static JSValue js_sys_canvas_line(JSContext *ctx, JSValue *this_val,
+                                   int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 6) return JS_ThrowTypeError(ctx,
+        "sys.canvas.line(id, x0, y0, x1, y1, color, thickness?): args missing");
+    JSCStringBuf id_buf;
+    size_t id_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+    int x0=0, y0=0, x1=0, y1=0, color=0, thickness=1;
+    if (JS_ToInt32(ctx, &x0,    argv[1])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &y0,    argv[2])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &x1,    argv[3])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &y1,    argv[4])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &color, argv[5])) return JS_EXCEPTION;
+    if (argc >= 7 && JS_ToInt32(ctx, &thickness, argv[6])) return JS_EXCEPTION;
+    bool ok = dynamic_app_ui_enqueue_canvas_line(id, id_len,
+                                                   (int16_t)x0, (int16_t)y0,
+                                                   (int16_t)x1, (int16_t)y1,
+                                                   (uint32_t)color,
+                                                   (uint8_t)thickness);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+static JSValue js_sys_canvas_save_to(JSContext *ctx, JSValue *this_val,
+                                       int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 2) return JS_ThrowTypeError(ctx,
+        "sys.canvas.saveTo(id, relpath): args missing");
+    JSCStringBuf id_buf, rp_buf;
+    size_t id_len = 0, rp_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+    const char *rp = JS_ToCStringLen(ctx, &rp_len, argv[1], &rp_buf);
+    if (!rp) return JS_EXCEPTION;
+    bool ok = dynamic_app_ui_enqueue_canvas_save(id, id_len, rp, rp_len);
+    return JS_NewBool(ok ? 1 : 0);
+}
+
+static JSValue js_sys_canvas_load_from(JSContext *ctx, JSValue *this_val,
+                                         int argc, JSValue *argv)
+{
+    (void)this_val;
+    if (argc < 2) return JS_ThrowTypeError(ctx,
+        "sys.canvas.loadFrom(id, relpath): args missing");
+    JSCStringBuf id_buf, rp_buf;
+    size_t id_len = 0, rp_len = 0;
+    const char *id = JS_ToCStringLen(ctx, &id_len, argv[0], &id_buf);
+    if (!id) return JS_EXCEPTION;
+    const char *rp = JS_ToCStringLen(ctx, &rp_len, argv[1], &rp_buf);
+    if (!rp) return JS_EXCEPTION;
+    bool ok = dynamic_app_ui_enqueue_canvas_load(id, id_len, rp, rp_len);
+    return JS_NewBool(ok ? 1 : 0);
 }
 
 /* ============================================================================
@@ -1108,6 +1250,12 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     rt->func_idx_sys_ui_modal                = (int)base_count + 29;
     rt->func_idx_sys_ui_toast                = (int)base_count + 30;
     rt->func_idx_sys_ui_fade_in              = (int)base_count + 31;
+    rt->func_idx_sys_canvas_create           = (int)base_count + 32;
+    rt->func_idx_sys_canvas_fill             = (int)base_count + 33;
+    rt->func_idx_sys_canvas_pixel            = (int)base_count + 34;
+    rt->func_idx_sys_canvas_line             = (int)base_count + 35;
+    rt->func_idx_sys_canvas_save_to          = (int)base_count + 36;
+    rt->func_idx_sys_canvas_load_from        = (int)base_count + 37;
 
     /* 函数定义填充 */
     DEF_CFN(func_idx_sys_log,                     js_sys_log,                     1);
@@ -1142,6 +1290,12 @@ void dynamic_app_natives_register(dynamic_app_runtime_t *rt, size_t base_count)
     DEF_CFN(func_idx_sys_ui_modal,                js_sys_ui_modal,                1);
     DEF_CFN(func_idx_sys_ui_toast,                js_sys_ui_toast,                2);
     DEF_CFN(func_idx_sys_ui_fade_in,              js_sys_ui_fade_in,              2);
+    DEF_CFN(func_idx_sys_canvas_create,           js_sys_canvas_create,           4);
+    DEF_CFN(func_idx_sys_canvas_fill,             js_sys_canvas_fill,             2);
+    DEF_CFN(func_idx_sys_canvas_pixel,            js_sys_canvas_pixel,            4);
+    DEF_CFN(func_idx_sys_canvas_line,             js_sys_canvas_line,             7);
+    DEF_CFN(func_idx_sys_canvas_save_to,          js_sys_canvas_save_to,          2);
+    DEF_CFN(func_idx_sys_canvas_load_from,        js_sys_canvas_load_from,        2);
 }
 
 #undef DEF_CFN
@@ -1173,6 +1327,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     JSValue app     = JS_NewObject(ctx);
     JSValue ble     = JS_NewObject(ctx);
     JSValue fs      = JS_NewObject(ctx);
+    JSValue canvas  = JS_NewObject(ctx);
     JSValue symbols = JS_NewObject(ctx);
     JSValue style   = JS_NewObject(ctx);
     JSValue align   = JS_NewObject(ctx);
@@ -1215,6 +1370,14 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     BIND_FN(fs, "exists", func_idx_sys_fs_exists);
     BIND_FN(fs, "remove", func_idx_sys_fs_remove);
     BIND_FN(fs, "list",   func_idx_sys_fs_list);
+
+    /* sys.canvas.* —— 像素级绘图（buffer 在 PSRAM） */
+    BIND_FN(canvas, "create",   func_idx_sys_canvas_create);
+    BIND_FN(canvas, "fill",     func_idx_sys_canvas_fill);
+    BIND_FN(canvas, "setPixel", func_idx_sys_canvas_pixel);
+    BIND_FN(canvas, "line",     func_idx_sys_canvas_line);
+    BIND_FN(canvas, "saveTo",   func_idx_sys_canvas_save_to);
+    BIND_FN(canvas, "loadFrom", func_idx_sys_canvas_load_from);
 
     /* sys.symbols.* —— LVGL 内置 UTF-8 图标字面量 */
     (void)JS_SetPropertyStr(ctx, symbols, "BLUETOOTH", JS_NewString(ctx, LV_SYMBOL_BLUETOOTH));
@@ -1278,6 +1441,7 @@ esp_err_t dynamic_app_natives_bind(JSContext *ctx)
     (void)JS_SetPropertyStr(ctx, sys, "app",     app);
     (void)JS_SetPropertyStr(ctx, sys, "ble",     ble);
     (void)JS_SetPropertyStr(ctx, sys, "fs",      fs);
+    (void)JS_SetPropertyStr(ctx, sys, "canvas",  canvas);
     (void)JS_SetPropertyStr(ctx, sys, "symbols", symbols);
     (void)JS_SetPropertyStr(ctx, sys, "style",   style);
     (void)JS_SetPropertyStr(ctx, sys, "align",   align);

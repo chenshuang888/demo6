@@ -30,6 +30,9 @@
 #include <stdio.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "dynapp_fs_worker.h"
+#include "dynapp_script_store.h"
 
 static const char *TAG = "dynamic_app_ui";
 
@@ -59,6 +62,7 @@ static struct {
     lv_obj_t *active_target;
     char      active_id[DYNAMIC_APP_UI_ID_MAX_LEN];
     int16_t   acc_dx, acc_dy;
+    bool      long_press_fired;   /* 本次手势是否已触发 LONG_PRESS；true 时吞掉 CLICKED */
 } s_gesture = { .active_target = NULL };
 
 /* 一次性 build-ready 回调：drain 在处理完 ATTACH_ROOT_LISTENER 后触发并自动清空。
@@ -99,12 +103,22 @@ esp_err_t dynamic_app_ui_init(void)
 
 void dynamic_app_ui_unregister_all(void)
 {
-    /* LVGL 对象本身由页面 lv_obj_del(screen) 级联释放，这里只清 registry。 */
+    /* LVGL 对象本身由页面 lv_obj_del(screen) 级联释放，这里只清 registry。
+     * 但 aux 指针指向我们 malloc 的额外缓冲（如 canvas 像素 buffer），LVGL
+     * 不知道它的存在，必须手动 free。 */
+    for (int i = 0; i < DYNAMIC_APP_UI_REGISTRY_MAX; i++) {
+        if (!s_registry[i].used) continue;
+        if (s_registry[i].aux) {
+            free(s_registry[i].aux);
+            s_registry[i].aux = NULL;
+        }
+    }
     memset(s_registry, 0, sizeof(s_registry));
     /* 手势状态也清，避免下次进 app 时残留指针 */
     s_gesture.active_target = NULL;
     s_gesture.active_id[0] = '\0';
     s_gesture.acc_dx = s_gesture.acc_dy = 0;
+    s_gesture.long_press_fired = false;
     /* modal/toast 也归零：lvgl 对象会随 screen 一起被级联删除，
      * 这里只把 C 端跟踪指针清掉，避免下次进 app 误用悬挂指针 */
     s_modal.overlay  = NULL;
@@ -327,6 +341,100 @@ bool dynamic_app_ui_enqueue_fade_in(const char *id, size_t id_len, uint16_t dela
     return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
 }
 
+/* ---- P2 canvas enqueue --------------------------------------------------- */
+
+bool dynamic_app_ui_enqueue_create_canvas(const char *id, size_t id_len,
+                                           const char *parent_id, size_t parent_len,
+                                           uint16_t w, uint16_t h)
+{
+    if (!s_ui_queue || !id) return false;
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CREATE_CANVAS;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    if (parent_id) {
+        utf8_copy_trunc(cmd.u.canvas_create.parent_id,
+                        sizeof(cmd.u.canvas_create.parent_id),
+                        parent_id, parent_len);
+    }
+    cmd.u.canvas_create.w = w;
+    cmd.u.canvas_create.h = h;
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_canvas_fill(const char *id, size_t id_len,
+                                         uint32_t color)
+{
+    if (!s_ui_queue || !id) return false;
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CANVAS_FILL;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    cmd.u.canvas_fill.color = color;
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_canvas_pixel(const char *id, size_t id_len,
+                                          int16_t x, int16_t y, uint32_t color)
+{
+    if (!s_ui_queue || !id) return false;
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CANVAS_PIXEL;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    cmd.u.canvas_pixel.x = x;
+    cmd.u.canvas_pixel.y = y;
+    cmd.u.canvas_pixel.color = color;
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_canvas_line(const char *id, size_t id_len,
+                                         int16_t x0, int16_t y0,
+                                         int16_t x1, int16_t y1,
+                                         uint32_t color, uint8_t thickness)
+{
+    if (!s_ui_queue || !id) return false;
+    if (thickness == 0) thickness = 1;
+    if (thickness > 6)  thickness = 6;
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CANVAS_LINE;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    cmd.u.canvas_line.x0 = x0;
+    cmd.u.canvas_line.y0 = y0;
+    cmd.u.canvas_line.x1 = x1;
+    cmd.u.canvas_line.y1 = y1;
+    cmd.u.canvas_line.color = color;
+    cmd.u.canvas_line.thickness = thickness;
+    if (cmd.id[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_canvas_save(const char *id, size_t id_len,
+                                         const char *relpath, size_t rp_len)
+{
+    if (!s_ui_queue || !id || !relpath) return false;
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CANVAS_SAVE;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    utf8_copy_trunc(cmd.u.canvas_io.relpath, sizeof(cmd.u.canvas_io.relpath),
+                    relpath, rp_len);
+    if (cmd.id[0] == '\0' || cmd.u.canvas_io.relpath[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+bool dynamic_app_ui_enqueue_canvas_load(const char *id, size_t id_len,
+                                         const char *relpath, size_t rp_len)
+{
+    if (!s_ui_queue || !id || !relpath) return false;
+    dynamic_app_ui_command_t cmd = {0};
+    cmd.type = DYNAMIC_APP_UI_CMD_CANVAS_LOAD;
+    utf8_copy_trunc(cmd.id, sizeof(cmd.id), id, id_len);
+    utf8_copy_trunc(cmd.u.canvas_io.relpath, sizeof(cmd.u.canvas_io.relpath),
+                    relpath, rp_len);
+    if (cmd.id[0] == '\0' || cmd.u.canvas_io.relpath[0] == '\0') return false;
+    return xQueueSend(s_ui_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
 /* ============================================================================
  * §5. UI→Script 反向事件
  *
@@ -371,6 +479,7 @@ static void on_lv_root_event(lv_event_t *e)
         if (slot < 0) return;
         s_gesture.active_target = target;
         s_gesture.acc_dx = s_gesture.acc_dy = 0;
+        s_gesture.long_press_fired = false;
         strncpy(s_gesture.active_id, s_registry[slot].id,
                 sizeof(s_gesture.active_id) - 1);
         s_gesture.active_id[sizeof(s_gesture.active_id) - 1] = '\0';
@@ -404,7 +513,13 @@ static void on_lv_root_event(lv_event_t *e)
 
     if (code == LV_EVENT_CLICKED) {
         /* CLICKED 只在没拖动时触发；用 LVGL 报告的 target，
-         * 因为 active_target 在 RELEASED 已清。 */
+         * 因为 active_target 在 RELEASED 已清。
+         * 长按已触发 LONG_PRESS 时吞掉本次 CLICKED，避免业务侧同时触发
+         * onClick + onLongPress（典型场景：长按删除时不希望同时进入条目）。 */
+        if (s_gesture.long_press_fired) {
+            s_gesture.long_press_fired = false;
+            return;
+        }
         lv_obj_t *target = lv_event_get_target_obj(e);
         if (!target) return;
         int slot = registry_find_by_obj(target);
@@ -417,6 +532,7 @@ static void on_lv_root_event(lv_event_t *e)
         /* LVGL 默认 ~400ms 触发；与 PRESSED 共享 active_target，
          * 没拖动时才发（拖过会被 LVGL 自己抑制） */
         if (!s_gesture.active_target) return;
+        s_gesture.long_press_fired = true;
         enqueue_event(DYNAMIC_APP_UI_EV_LONG_PRESS, s_gesture.active_id, 0, 0);
         return;
     }
@@ -515,6 +631,9 @@ static int do_create(const dynamic_app_ui_command_t *cmd, ui_obj_type_t type,
              * 这里不直接处理路径拼接，保持 do_create 与 src 解耦。 */
             break;
         }
+        case UI_OBJ_CANVAS:
+            /* canvas 走 do_create_canvas，不会走到这里 */
+            return -3;
     }
 
     if (!obj) return -3;
@@ -562,6 +681,222 @@ static void do_set_image_src(lv_obj_t *obj, const char *src)
         return;
     }
     lv_image_set_src(obj, path);
+}
+
+/* ============================================================================
+ * Canvas helpers（P2）
+ *
+ *   - canvas obj 自挂 PRESSED/PRESSING/RELEASED：dx/dy 字段填**屏幕绝对坐标**
+ *     （而非现有 root listener 的相对增量），让画笔逻辑能直接拿到 (x, y)。
+ *   - aux 字段持有 PSRAM 中的 RGB565 buffer（unregister/destroy 时 free）。
+ *   - LVGL 9.x 的 lv_canvas_set_px 内部已 invalidate；fill/line 我们手动调
+ *     lv_obj_invalidate 触发重绘。
+ * ========================================================================= */
+
+#define CANVAS_DEFAULT_W   240
+#define CANVAS_DEFAULT_H   320
+#define CANVAS_BPP         2     /* RGB565 */
+
+static void on_canvas_press_event(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *obj = lv_event_get_current_target_obj(e);
+    if (!obj) return;
+    int slot = registry_find_by_obj(obj);
+    if (slot < 0) return;
+
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p; lv_indev_get_point(indev, &p);
+
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    int16_t lx = (int16_t)(p.x - coords.x1);
+    int16_t ly = (int16_t)(p.y - coords.y1);
+
+    uint8_t ev_type = 0;
+    if      (code == LV_EVENT_PRESSED)  ev_type = DYNAMIC_APP_UI_EV_PRESS;
+    else if (code == LV_EVENT_PRESSING) ev_type = DYNAMIC_APP_UI_EV_DRAG;
+    else if (code == LV_EVENT_RELEASED) ev_type = DYNAMIC_APP_UI_EV_RELEASE;
+    else return;
+
+    /* 复用 enqueue_event 的字段，但 dx/dy 含义在 canvas 路径下=画布内坐标 */
+    enqueue_event(ev_type, s_registry[slot].id, lx, ly);
+}
+
+static int do_create_canvas(const dynamic_app_ui_command_t *cmd)
+{
+    lv_obj_t *root = (lv_obj_t *)s_root;
+    if (!root || !lv_obj_is_valid(root)) {
+        s_root = NULL;
+        return -1;
+    }
+    /* 同 id 复用：已存在且对象有效则直接返回（不重新分配 buffer） */
+    int slot = registry_find(cmd->id);
+    if (slot >= 0 && s_registry[slot].obj && lv_obj_is_valid(s_registry[slot].obj)) {
+        return 0;
+    }
+    if (slot >= 0) {
+        if (s_registry[slot].aux) { free(s_registry[slot].aux); s_registry[slot].aux = NULL; }
+        s_registry[slot].used = false;
+    }
+
+    lv_obj_t *parent = resolve_parent(cmd->u.canvas_create.parent_id);
+    if (!parent || !lv_obj_is_valid(parent)) {
+        ESP_LOGW(TAG, "parent invalid, drop canvas id=%s", cmd->id);
+        return -2;
+    }
+
+    uint16_t w = cmd->u.canvas_create.w ? cmd->u.canvas_create.w : CANVAS_DEFAULT_W;
+    uint16_t h = cmd->u.canvas_create.h ? cmd->u.canvas_create.h : CANVAS_DEFAULT_H;
+    /* 限制画布尺寸，避免 OOM */
+    if (w > 320) w = 320;
+    if (h > 320) h = 320;
+
+    size_t buf_len = (size_t)w * h * CANVAS_BPP;
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(buf_len,
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) {
+        buf = (uint8_t *)heap_caps_malloc(buf_len, MALLOC_CAP_8BIT);  /* fallback */
+    }
+    if (!buf) {
+        ESP_LOGE(TAG, "canvas buf alloc %u failed", (unsigned)buf_len);
+        return -3;
+    }
+    memset(buf, 0xFF, buf_len);  /* 默认白底 */
+
+    lv_obj_t *obj = lv_canvas_create(parent);
+    if (!obj) { free(buf); return -4; }
+    lv_canvas_set_buffer(obj, buf, w, h, LV_COLOR_FORMAT_RGB565);
+
+    /* 让 canvas 能收到指针事件（默认 lv_canvas 不 clickable） */
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_PRESS_LOCK);
+    /* 不让事件冒泡到 root listener：避免 (画布坐标) 和 (root: dx=0,dy=0)
+     * 双发，导致 state.cur 被反复重置。canvas 自己处理这套手势事件。 */
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_add_event_cb(obj, on_canvas_press_event, LV_EVENT_PRESSED,  NULL);
+    lv_obj_add_event_cb(obj, on_canvas_press_event, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(obj, on_canvas_press_event, LV_EVENT_RELEASED, NULL);
+
+    int new_slot = registry_alloc(cmd->id, UI_OBJ_CANVAS, obj);
+    if (new_slot < 0) {
+        ESP_LOGW(TAG, "registry full, drop canvas id=%s", cmd->id);
+        lv_obj_del(obj);
+        free(buf);
+        return -5;
+    }
+    s_registry[new_slot].aux = buf;
+    return 0;
+}
+
+/* RGB565 单像素写入 */
+static inline void canvas_putpx(uint8_t *buf, int w, int h, int x, int y,
+                                 uint32_t rgb888)
+{
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    uint16_t r = ((rgb888 >> 16) & 0xFF) >> 3;
+    uint16_t g = ((rgb888 >>  8) & 0xFF) >> 2;
+    uint16_t b = ( rgb888        & 0xFF) >> 3;
+    uint16_t v = (uint16_t)((r << 11) | (g << 5) | b);
+    /* LVGL RGB565 默认小端：低字节在前 */
+    uint8_t *p = buf + (y * w + x) * 2;
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void canvas_fill_buf(uint8_t *buf, int w, int h, uint32_t rgb888)
+{
+    uint16_t r = ((rgb888 >> 16) & 0xFF) >> 3;
+    uint16_t g = ((rgb888 >>  8) & 0xFF) >> 2;
+    uint16_t b = ( rgb888        & 0xFF) >> 3;
+    uint16_t v = (uint16_t)((r << 11) | (g << 5) | b);
+    uint8_t lo = (uint8_t)(v & 0xFF), hi = (uint8_t)(v >> 8);
+    int n = w * h;
+    uint8_t *p = buf;
+    for (int i = 0; i < n; i++) { *p++ = lo; *p++ = hi; }
+}
+
+/* Bresenham 线 + thickness（沿主线每点画一个 (2t-1)×(2t-1) 方块） */
+static void canvas_line_buf(uint8_t *buf, int w, int h,
+                             int x0, int y0, int x1, int y1,
+                             uint32_t rgb888, int thickness)
+{
+    int dx =  abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+    int half = thickness / 2;
+    for (;;) {
+        for (int oy = -half; oy <= half; oy++) {
+            for (int ox = -half; ox <= half; ox++) {
+                canvas_putpx(buf, w, h, x0 + ox, y0 + oy, rgb888);
+            }
+        }
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* 把指定 canvas 的 buffer 同步落盘到 data/<rel>。
+ * 走 fs_worker 的 large 路径：拷一份到 PSRAM 后 worker 串行写 + free。 */
+static void do_canvas_save(const char *id, const char *relpath)
+{
+    extern const char *dynamic_app_registry_current(void);
+    const char *app = dynamic_app_registry_current();
+    if (!app || !app[0]) return;
+    int slot = registry_find(id);
+    if (slot < 0 || s_registry[slot].type != UI_OBJ_CANVAS) {
+        ESP_LOGW(TAG, "canvas_save: id=%s not a canvas", id);
+        return;
+    }
+    lv_obj_t *obj = s_registry[slot].obj;
+    if (!obj || !lv_obj_is_valid(obj)) return;
+    uint8_t *buf = (uint8_t *)s_registry[slot].aux;
+    if (!buf) return;
+
+    int32_t w = lv_obj_get_width(obj);
+    int32_t h = lv_obj_get_height(obj);
+    if (w <= 0 || h <= 0) return;
+    size_t len = (size_t)w * h * CANVAS_BPP;
+
+    if (!dynapp_fs_worker_submit_user_write_large(app, relpath, buf, len)) {
+        ESP_LOGW(TAG, "canvas_save submit failed (%uB)", (unsigned)len);
+    }
+}
+
+/* 同步从 data/<rel> 读回 buffer（read_file 同步），完了 invalidate canvas。 */
+static void do_canvas_load(const char *id, const char *relpath)
+{
+    extern const char *dynamic_app_registry_current(void);
+    const char *app = dynamic_app_registry_current();
+    if (!app || !app[0]) return;
+    int slot = registry_find(id);
+    if (slot < 0 || s_registry[slot].type != UI_OBJ_CANVAS) return;
+    lv_obj_t *obj = s_registry[slot].obj;
+    if (!obj || !lv_obj_is_valid(obj)) return;
+    uint8_t *buf = (uint8_t *)s_registry[slot].aux;
+    if (!buf) return;
+
+    int32_t w = lv_obj_get_width(obj);
+    int32_t h = lv_obj_get_height(obj);
+    if (w <= 0 || h <= 0) return;
+    size_t expect = (size_t)w * h * CANVAS_BPP;
+
+    uint8_t *file_buf = NULL;
+    size_t   file_len = 0;
+    if (dynapp_user_data_read(app, relpath, &file_buf, &file_len) != ESP_OK) {
+        ESP_LOGW(TAG, "canvas_load %s/%s read failed", app, relpath);
+        return;
+    }
+    size_t copy = file_len < expect ? file_len : expect;
+    memcpy(buf, file_buf, copy);
+    if (copy < expect) {
+        memset(buf + copy, 0xFF, expect - copy);   /* 文件短了用白色补齐 */
+    }
+    dynapp_script_store_release(file_buf);
+    lv_obj_invalidate(obj);
 }
 
 /* ============================================================================
@@ -963,6 +1298,10 @@ void dynamic_app_ui_drain(int max_count)
                      * 由 lv_obj_is_valid 检查清掉，最坏 page 退出 unregister_all。 */
                     lv_obj_del(obj);
                 }
+                if (s_registry[slot].aux) {
+                    free(s_registry[slot].aux);
+                    s_registry[slot].aux = NULL;
+                }
                 s_registry[slot].used = false;
                 s_registry[slot].obj = NULL;
                 s_registry[slot].id[0] = '\0';
@@ -988,6 +1327,64 @@ void dynamic_app_ui_drain(int max_count)
                 }
                 break;
             }
+
+            case DYNAMIC_APP_UI_CMD_CREATE_CANVAS:
+                (void)do_create_canvas(&cmd);
+                break;
+
+            case DYNAMIC_APP_UI_CMD_CANVAS_FILL: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0 || s_registry[slot].type != UI_OBJ_CANVAS) break;
+                lv_obj_t *obj = s_registry[slot].obj;
+                uint8_t *buf = (uint8_t *)s_registry[slot].aux;
+                if (!obj || !lv_obj_is_valid(obj) || !buf) break;
+                int32_t w = lv_obj_get_width(obj);
+                int32_t h = lv_obj_get_height(obj);
+                if (w <= 0 || h <= 0) break;
+                canvas_fill_buf(buf, w, h, cmd.u.canvas_fill.color);
+                lv_obj_invalidate(obj);
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_CANVAS_PIXEL: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0 || s_registry[slot].type != UI_OBJ_CANVAS) break;
+                lv_obj_t *obj = s_registry[slot].obj;
+                uint8_t *buf = (uint8_t *)s_registry[slot].aux;
+                if (!obj || !lv_obj_is_valid(obj) || !buf) break;
+                int32_t w = lv_obj_get_width(obj);
+                int32_t h = lv_obj_get_height(obj);
+                canvas_putpx(buf, w, h,
+                             cmd.u.canvas_pixel.x, cmd.u.canvas_pixel.y,
+                             cmd.u.canvas_pixel.color);
+                lv_obj_invalidate(obj);
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_CANVAS_LINE: {
+                int slot = registry_find(cmd.id);
+                if (slot < 0 || s_registry[slot].type != UI_OBJ_CANVAS) break;
+                lv_obj_t *obj = s_registry[slot].obj;
+                uint8_t *buf = (uint8_t *)s_registry[slot].aux;
+                if (!obj || !lv_obj_is_valid(obj) || !buf) break;
+                int32_t w = lv_obj_get_width(obj);
+                int32_t h = lv_obj_get_height(obj);
+                canvas_line_buf(buf, w, h,
+                                cmd.u.canvas_line.x0, cmd.u.canvas_line.y0,
+                                cmd.u.canvas_line.x1, cmd.u.canvas_line.y1,
+                                cmd.u.canvas_line.color,
+                                cmd.u.canvas_line.thickness);
+                lv_obj_invalidate(obj);
+                break;
+            }
+
+            case DYNAMIC_APP_UI_CMD_CANVAS_SAVE:
+                do_canvas_save(cmd.id, cmd.u.canvas_io.relpath);
+                break;
+
+            case DYNAMIC_APP_UI_CMD_CANVAS_LOAD:
+                do_canvas_load(cmd.id, cmd.u.canvas_io.relpath);
+                break;
 
             default:
                 break;

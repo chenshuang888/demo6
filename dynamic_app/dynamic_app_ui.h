@@ -41,6 +41,9 @@ extern "C" {
  * 后传给 lv_image_set_src()。 */
 #define DYNAMIC_APP_UI_SRC_MAX_LEN    32
 
+/* canvas save/load 时的 data/ 沙箱相对路径上限（与 DYNAPP_USER_DATA_MAX_PATH 对齐） */
+#define DYNAMIC_APP_USER_PATH_MAX     32
+
 typedef enum {
     DYNAMIC_APP_UI_CMD_SET_TEXT = 1,
     DYNAMIC_APP_UI_CMD_CREATE_LABEL,
@@ -57,6 +60,14 @@ typedef enum {
     DYNAMIC_APP_UI_CMD_TOAST,                  /* 屏底 toast，dur_ms 后自动消失 */
     DYNAMIC_APP_UI_CMD_FADE_IN,                /* 给已存在的对象做淡入动画 */
     DYNAMIC_APP_UI_CMD_FADE_OUT_DESTROY,       /* 淡出 + 销毁（toast 内部用） */
+
+    /* P2 新增：sys.canvas.* —— 像素级绘图 ----------------------------------- */
+    DYNAMIC_APP_UI_CMD_CREATE_CANVAS,          /* 240×320 RGB565 buffer in PSRAM */
+    DYNAMIC_APP_UI_CMD_CANVAS_FILL,            /* 整张填色 */
+    DYNAMIC_APP_UI_CMD_CANVAS_PIXEL,           /* 单像素 */
+    DYNAMIC_APP_UI_CMD_CANVAS_LINE,            /* Bresenham 线，含粗细 */
+    DYNAMIC_APP_UI_CMD_CANVAS_SAVE,            /* dump buffer → data/<rel>.bin */
+    DYNAMIC_APP_UI_CMD_CANVAS_LOAD,            /* data/<rel>.bin → buffer */
 } dynamic_app_ui_cmd_type_t;
 
 /*
@@ -118,6 +129,28 @@ typedef struct {
         struct {
             uint16_t delay_ms;
         } fade;                                           /* FADE_IN（id 字段标记目标） */
+
+        /* P2 canvas ---------------------------------------------------- */
+        struct {
+            char parent_id[DYNAMIC_APP_UI_ID_MAX_LEN];
+            uint16_t w;        /* 0 → 默认 240 */
+            uint16_t h;        /* 0 → 默认 320 */
+        } canvas_create;                                  /* CREATE_CANVAS */
+        struct {
+            uint32_t color;                               /* 0xRRGGBB */
+        } canvas_fill;                                    /* CANVAS_FILL */
+        struct {
+            int16_t  x, y;
+            uint32_t color;
+        } canvas_pixel;                                   /* CANVAS_PIXEL */
+        struct {
+            int16_t  x0, y0, x1, y1;
+            uint32_t color;
+            uint8_t  thickness;                           /* 1..6 */
+        } canvas_line;                                    /* CANVAS_LINE */
+        struct {
+            char relpath[DYNAMIC_APP_USER_PATH_MAX];
+        } canvas_io;                                      /* CANVAS_SAVE / CANVAS_LOAD */
     } u;
 } dynamic_app_ui_command_t;
 
@@ -226,6 +259,26 @@ bool dynamic_app_ui_enqueue_toast(const char *text, size_t text_len, uint16_t du
 
 /* 给已存在的对象做淡入动画（透明 0 → 全显，可选 delay）。 */
 bool dynamic_app_ui_enqueue_fade_in(const char *id, size_t id_len, uint16_t delay_ms);
+
+/* ---- P2 canvas ---------------------------------------------------------- */
+
+/* 创建 240x320 RGB565 canvas（buffer 由本层在 PSRAM 分配并挂在 registry slot 的
+ * aux 字段上；unregister/destroy 时自动 free）。返回 false = 队列满 / 参数非法。 */
+bool dynamic_app_ui_enqueue_create_canvas(const char *id, size_t id_len,
+                                           const char *parent_id, size_t parent_len,
+                                           uint16_t w, uint16_t h);
+bool dynamic_app_ui_enqueue_canvas_fill(const char *id, size_t id_len,
+                                         uint32_t color);
+bool dynamic_app_ui_enqueue_canvas_pixel(const char *id, size_t id_len,
+                                          int16_t x, int16_t y, uint32_t color);
+bool dynamic_app_ui_enqueue_canvas_line(const char *id, size_t id_len,
+                                         int16_t x0, int16_t y0,
+                                         int16_t x1, int16_t y1,
+                                         uint32_t color, uint8_t thickness);
+bool dynamic_app_ui_enqueue_canvas_save(const char *id, size_t id_len,
+                                         const char *relpath, size_t rp_len);
+bool dynamic_app_ui_enqueue_canvas_load(const char *id, size_t id_len,
+                                         const char *relpath, size_t rp_len);
 
 /* ---------------- UI -> Script ---------------- */
 

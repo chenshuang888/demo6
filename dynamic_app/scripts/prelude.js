@@ -220,6 +220,9 @@ var VDOM = (function () {
         else if (node.type === 'label')  sys.ui.createLabel(id, parentId || null);
         else if (node.type === 'image')  sys.ui.createImage(id, parentId || null,
                                                             node.props.src || null);
+        else if (node.type === 'canvas') sys.canvas.create(id, parentId || null,
+                                                            (node.props.w || 0) | 0,
+                                                            (node.props.h || 0) | 0);
         else { sys.log("VDOM: unknown type " + node.type); return node; }
 
         if (node.props.text !== undefined) sys.ui.setText(id, "" + node.props.text);

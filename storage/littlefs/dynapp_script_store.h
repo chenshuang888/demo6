@@ -27,6 +27,8 @@ extern "C" {
 #define DYNAPP_SCRIPT_STORE_MAX_NAME    15           /* app_id 长度上限 */
 #define DYNAPP_SCRIPT_STORE_MAX_FNAME   31           /* 仓内单个文件名上限 */
 #define DYNAPP_USER_DATA_MAX_PATH       31           /* sys.fs 相对路径上限 */
+#define DYNAPP_USER_DATA_MAX_BYTES      (256 * 1024) /* sys.fs.write 大文件上限
+                                                      * （走分段写路径，PSRAM 中转） */
 
 /* 入口与元信息文件名约定（不在 manifest 声明，固定下来） */
 #define DYNAPP_FILE_MAIN      "main.js"

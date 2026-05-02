@@ -47,6 +47,13 @@ esp_err_t dynapp_fs_worker_init(void);
 bool dynapp_fs_worker_submit_user_write(const char *app_id, const char *relpath,
                                          const uint8_t *data, size_t len);
 
+/* JS sys.fs.write 大块路径：超过 FS_CHUNK_MAX_BYTES 时走这条。
+ * 内部把 data 拷一份到 PSRAM 再入队，调用方可立即释放原 buf。
+ * 上限 DYNAPP_USER_DATA_MAX_BYTES（256KB）。失败已释放拷贝、返回 false。 */
+bool dynapp_fs_worker_submit_user_write_large(const char *app_id,
+                                               const char *relpath,
+                                               const uint8_t *data, size_t len);
+
 bool dynapp_fs_worker_submit_user_remove(const char *app_id, const char *relpath);
 
 /* BLE 上传：开 writer / 追加 chunk / 取消。

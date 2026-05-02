@@ -240,7 +240,8 @@ esp_err_t dynapp_script_store_init(void)
  * §4. 通用 read/write helper（不带名字校验，由公开 API 校验后调）
  * ========================================================================= */
 
-static esp_err_t read_file(const char *path, uint8_t **out_buf, size_t *out_len)
+static esp_err_t read_file(const char *path, uint8_t **out_buf, size_t *out_len,
+                            size_t max_bytes)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return ESP_ERR_NOT_FOUND;
@@ -248,8 +249,9 @@ static esp_err_t read_file(const char *path, uint8_t **out_buf, size_t *out_len)
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return ESP_FAIL; }
     long sz = ftell(f);
     if (sz < 0) { fclose(f); return ESP_FAIL; }
-    if ((size_t)sz > DYNAPP_SCRIPT_STORE_MAX_BYTES) {
-        ESP_LOGW(TAG, "%s too large (%ld), refusing", path, sz);
+    if ((size_t)sz > max_bytes) {
+        ESP_LOGW(TAG, "%s too large (%ld > %u), refusing",
+                 path, sz, (unsigned)max_bytes);
         fclose(f);
         return ESP_ERR_INVALID_SIZE;
     }
@@ -308,7 +310,7 @@ esp_err_t dynapp_app_file_read(const char *app_id, const char *filename,
 
     char path[PATH_BUFSZ];
     build_app_file(path, sizeof(path), app_id, filename, false);
-    return read_file(path, out_buf, out_len);
+    return read_file(path, out_buf, out_len, DYNAPP_SCRIPT_STORE_MAX_BYTES);
 }
 
 esp_err_t dynapp_app_file_write(const char *app_id, const char *filename,
@@ -559,7 +561,7 @@ esp_err_t dynapp_user_data_read(const char *app_id, const char *relpath,
         return ESP_ERR_INVALID_ARG;
     char path[PATH_BUFSZ];
     build_user_data_path(path, sizeof(path), app_id, relpath);
-    return read_file(path, out_buf, out_len);
+    return read_file(path, out_buf, out_len, DYNAPP_USER_DATA_MAX_BYTES);
 }
 
 esp_err_t dynapp_user_data_write(const char *app_id, const char *relpath,
@@ -567,7 +569,7 @@ esp_err_t dynapp_user_data_write(const char *app_id, const char *relpath,
 {
     if (!app_id_is_valid(app_id) || !user_relpath_is_valid(relpath) || !buf)
         return ESP_ERR_INVALID_ARG;
-    if (len == 0 || len > DYNAPP_SCRIPT_STORE_MAX_BYTES)
+    if (len == 0 || len > DYNAPP_USER_DATA_MAX_BYTES)
         return ESP_ERR_INVALID_SIZE;
 
     esp_err_t e = ensure_data_dir(app_id);
