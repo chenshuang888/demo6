@@ -394,8 +394,9 @@ sys.__setDispatcher(function (id, type, dx, dy) {
 //
 // 返回对象:
 //   send(type, body?)   -> bool   发 { from: appName, type, body? } 给 PC
-//   on(type, fn)                  注册 type 回调；fn 收到已解析的 msg
-//   onAny(fn)                     收到任何"给我的"消息都触发（不含 ping）
+//   on(type, fn)                  注册 type 回调；fn(body, meta) 直接收 body
+//                                 meta = { type, from }（极少用，备查）
+//   onAny(fn)                     收任何"给我的"消息（不含 ping）；fn(msg) 收完整字典
 //   onError(fn)                   JSON 解析失败回调；fn 收 raw 字符串
 //   isConnected()        -> bool
 //   appName              字符串
@@ -404,6 +405,7 @@ sys.__setDispatcher(function (id, type, dx, dy) {
 //   - 每个 app 调用一次 makeBle 即可；新调用会覆盖旧的底层 onRecv
 //   - "to" 字段不匹配 appName 且不为 "*" 的消息会被静默丢弃
 //   - type === "ping" 自动回 pong，业务侧 on("ping") 不会被触发
+//   - body 缺失时 fn 收到 {} 而不是 undefined（少一层 if 判断）
 // ----------------------------------------------------------------------------
 
 function makeBle(appName) {
@@ -434,7 +436,9 @@ function makeBle(appName) {
             catch (eAny) { sys.log("ble.onAny throw: " + eAny); }
         }
         if (msg.type && typeRoutes[msg.type]) {
-            try { typeRoutes[msg.type](msg); }
+            var body = (msg.body !== undefined && msg.body !== null) ? msg.body : {};
+            var meta = { type: msg.type, from: msg.from };
+            try { typeRoutes[msg.type](body, meta); }
             catch (eType) { sys.log("ble.on(" + msg.type + ") throw: " + eType); }
         }
     });
@@ -592,6 +596,7 @@ var UI = (function () {
     }
 
     // ---- iconBtn: 透明图标按钮（按下 accent 蒙层）-------------------------
+    // opts: { id, icon, iconId?, color?, w?, h?, onClick }
     function iconBtn(opts) {
         var o = opts || {};
         var color = o.color === undefined ? T.C_ACCENT : o.color;
@@ -603,12 +608,14 @@ var UI = (function () {
             pressedBg: { color: T.C_ACCENT, opa: 51 },
             onClick: o.onClick
         }, [
-            h('label', { text: o.icon || '', fg: color,
+            h('label', { id: o.iconId, text: o.icon || '', fg: color,
                          font: 'icon24', align: ['c', 0, 0] })
         ]);
     }
 
     // ---- pillBtn: 填充胶囊按钮（accent 蓝底白字）--------------------------
+    // opts: { id, text, textId?, w?, h?, bg?, fg?, onClick }
+    //   textId: 给内部 label 一个 id，业务可用 VDOM.set(textId, {text:'...'}) 切换文字
     function pillBtn(opts) {
         var o = opts || {};
         return h('button', {
@@ -619,13 +626,14 @@ var UI = (function () {
             pressedBg: { color: 0x000000, opa: 38 },
             onClick: o.onClick
         }, [
-            h('label', { text: o.text || '',
+            h('label', { id: o.textId, text: o.text || '',
                          fg: o.fg === undefined ? T.C_PANEL : o.fg,
                          font: 'title', align: ['c', 0, 0] })
         ]);
     }
 
     // ---- badge: 圆角胶囊小标签（数字徽章 / tag）---------------------------
+    // opts: { id, text, textId?, w?, h?, bg?, fg? }
     function badge(opts) {
         var o = opts || {};
         return h('panel', {
@@ -635,29 +643,37 @@ var UI = (function () {
             radius: T.R_PILL,
             scrollable: false
         }, [
-            h('label', { text: o.text === undefined ? '' : ('' + o.text),
+            h('label', { id: o.textId,
+                         text: o.text === undefined ? '' : ('' + o.text),
                          fg: o.fg === undefined ? T.C_PANEL : o.fg,
                          font: 'text', align: ['c', 0, 0] })
         ]);
     }
 
     // ---- statusBar: 仿原生顶栏（左 title，右图标占位）---------------------
-    // 不实现自绘电池/蓝牙（C 原生层的事），给业务页一个一致的标题区
+    // opts: { title, titleId?, right, rightId?, compact? }
+    //   compact=true：高 28、上下 pad 0（小屏内容稠密的 app 用）
+    //   titleId / rightId：业务想动态改标题/右图标时用
     function statusBar(opts) {
         var o = opts || {};
+        var compact = !!o.compact;
         var children = [
-            h('label', { text: o.title || '', fg: T.C_TEXT, font: 'title',
+            h('label', { id: o.titleId,
+                         text: o.title || '', fg: T.C_TEXT, font: 'title',
                          grow: 1, longMode: 'dot' })
         ];
         if (o.right) {
-            children.push(h('label', { text: o.right, fg: T.C_TEXT_MUTED,
+            children.push(h('label', { id: o.rightId,
+                                       text: o.right, fg: T.C_TEXT_MUTED,
                                        font: 'icon24' }));
         }
         return h('panel', {
-            size: [-100, 44],
+            size: [-100, compact ? 28 : 44],
             flex: 'row',
             flexAlign: ['between', 'center', 'center'],
-            pad: [T.SP_LG, T.SP_SM, T.SP_LG, T.SP_SM],
+            pad: compact
+                ? [T.SP_MD, 0, T.SP_MD, 0]
+                : [T.SP_LG, T.SP_SM, T.SP_LG, T.SP_SM],
             scrollable: false
         }, children);
     }
@@ -956,3 +972,34 @@ var Router = (function () {
         onLeave: onLeave
     };
 })();
+
+// ============================================================================
+// setTimeout / clearTimeout —— 基于 setInterval 包一层，提供一次性定时器。
+//
+// 平台 native 只暴露 setInterval / clearInterval。但业务很常见"N 毫秒后做一次
+// X" 的需求，硬要用 setInterval + 自管 clearInterval 既丑又容易漏清。
+//
+// 行为：
+//   setTimeout(fn, ms)     ms 后调一次 fn 然后自动清理；返回 timer id
+//   clearTimeout(id)       提前取消（id 必须是 setTimeout 返回值）
+//
+// 边界：
+//   - 不支持 fn 抛异常时的传播，会 sys.log warn
+//   - id 跟 setInterval 共用 ID 池：clearInterval(timeoutId) 也能取消（不推荐）
+// ============================================================================
+
+function setTimeout(fn, ms) {
+    var fired = false;
+    var id = setInterval(function () {
+        if (fired) return;          // 极端情况下 timer 在被 clear 之前重入：忽略
+        fired = true;
+        clearInterval(id);
+        try { fn(); } catch (e) { sys.log('setTimeout cb: ' + e); }
+    }, ms | 0);
+    return id;
+}
+
+function clearTimeout(id) {
+    clearInterval(id);
+}
+

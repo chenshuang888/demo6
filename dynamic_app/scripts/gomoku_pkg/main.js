@@ -366,9 +366,8 @@ function markPCSeen() {
 
 ble.on('present', function () { markPCSeen(); });
 
-ble.on('move', function (msg) {
+ble.on('move', function (b) {
     markPCSeen();
-    var b = msg.body;
     if (!b || typeof b.r !== 'number' || typeof b.c !== 'number') return;
     if (gameOver) {
         sys.log('gomoku: drop PC move (game over)');

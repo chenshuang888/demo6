@@ -202,19 +202,13 @@ function refreshHome() {
 }
 
 function startPauseBtn() {
-    return h('button', {
+    return UI.pillBtn({
         id: 'btnRun',
-        size: [120, 44],
-        bg: T.C_ACCENT, radius: 12,
-        pressedBg: { color: 0x000000, opa: 38 },
+        textId: 'btnRunLbl',
+        text: runtime.running ? '暂停' : '开始',
+        w: 120, h: 44,
         onClick: actStartPause
-    }, [
-        h('label', {
-            id: 'btnRunLbl',
-            text: runtime.running ? '暂停' : '开始',
-            fg: T.C_PANEL, font: 'title', align: ['c', 0, 0]
-        })
-    ]);
+    });
 }
 
 function buildHome() {

@@ -149,7 +149,7 @@ function actReset() {
 }
 
 // --- BLE 收消息 ---------------------------------------------------------
-ble.on('ready', function (msg) {
+ble.on('ready', function () {
     aiReadyOnce = true;
     if (phase === 'bootstrap' || phase === 'waiting_ai') {
         emptyBoard();
@@ -158,13 +158,12 @@ ble.on('ready', function (msg) {
     }
 });
 
-ble.on('move', function (msg) {
-    var body = msg && msg.body;
+ble.on('move', function (body) {
     if (!body) return;
     applyAiMove(body.r, body.c);
 });
 
-ble.on('reset_ack', function (msg) {
+ble.on('reset_ack', function () {
     /* 信息性，AI 也认账了 */
 });
 
@@ -228,22 +227,25 @@ function buildHome() {
 Router.define('home', buildHome);
 
 // --- 启动 ---------------------------------------------------------------
-// 反复发 hello 直到 PC 端 ready；ready 后清掉 interval。
+// 1.5s 内还没 ready 就显示"AI 准备中"，之后 2s/次 重发 hello 直到收到 ready。
 var helloT = null;
 function bootHandshake() {
     ble.send('hello');
-    helloT = setInterval(function () {
-        if (aiReadyOnce) {
-            clearInterval(helloT);
-            helloT = null;
-            return;
-        }
+    setTimeout(function () {
+        if (aiReadyOnce) return;
         if (phase === 'bootstrap') {
             phase = 'waiting_ai';
             refreshAll();
         }
-        ble.send('hello');
-    }, 2000);
+        helloT = setInterval(function () {
+            if (aiReadyOnce) {
+                clearInterval(helloT);
+                helloT = null;
+                return;
+            }
+            ble.send('hello');
+        }, 2000);
+    }, 1500);
 }
 
 sys.log('tictactoe: start');

@@ -94,8 +94,7 @@ function formatFull(ts) {
 }
 
 // --- BLE 接收 -------------------------------------------------------------
-ble.on("add", function (msg) {
-    var b = msg.body || {};
+ble.on("add", function (b) {
     sys.log("notif: ble.add fired title=" + (b.title || '') + " items=" + state.items.length);
     if (!b.title && !b.body) return;
     var item = {
