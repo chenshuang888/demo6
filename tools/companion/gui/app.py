@@ -15,7 +15,6 @@ from .pages.log import LogPage
 from .pages.music import MusicPage
 from .pages.notify import NotifyPage
 from .pages.upload import UploadPage
-from .pages.gomoku import GomokuPage
 from .theme import (
     COLOR_ACCENT, COLOR_BG, COLOR_MUTED, COLOR_PANEL, COLOR_PANEL_HI,
     COLOR_SIDEBAR, COLOR_TEXT, CTK_APPEARANCE, CTK_THEME, SIDEBAR_W,
@@ -31,18 +30,19 @@ PAGE_DEFS = [
     ("music",  "音乐",   MusicPage),
     ("upload", "上传",   UploadPage),
     ("notify", "通知",   NotifyPage),
-    ("gomoku", "五子棋", GomokuPage),
     ("log",    "日志",   LogPage),
 ]
 
 
 class CompanionApp:
     def __init__(self, bus: EventBus, runner: AsyncRunner,
-                  cfg_data: dict, on_quit_request) -> None:
+                  cfg_data: dict, on_quit_request,
+                  plugin_manager=None) -> None:
         self.bus = bus
         self.runner = runner
         self.cfg = cfg_data
         self._on_quit_request = on_quit_request
+        self._pm = plugin_manager
 
         enable_windows_dpi_awareness()
         ctk.set_appearance_mode(CTK_APPEARANCE)
@@ -66,6 +66,19 @@ class CompanionApp:
     # build
     # ------------------------------------------------------------------
 
+    def _collect_page_defs(self) -> list[tuple[str, str, object]]:
+        """合并内置 + 插件页。第三个元素是 callable (master, app) → frame。"""
+        out: list[tuple[str, str, object]] = []
+        for key, label, cls in PAGE_DEFS:
+            out.append((key, label, cls))
+        if self._pm is None:
+            return out
+        for pid, title, plugin in self._pm.get_gui_pages():
+            def make(master, app, p=plugin):
+                return p.make_gui_page(master, app)
+            out.append((pid, title, make))
+        return out
+
     def _build(self) -> None:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
@@ -76,6 +89,7 @@ class CompanionApp:
         side.grid(row=0, column=0, sticky="nsw")
         side.grid_propagate(False)
         side.grid_rowconfigure(99, weight=1)
+        self._sidebar = side
 
         ctk.CTkLabel(side, text="Companion",
                       text_color=COLOR_ACCENT,
@@ -86,8 +100,44 @@ class CompanionApp:
                       font=ctk.CTkFont(size=11)) \
             .grid(row=1, column=0, padx=20, pady=(0, 16), sticky="w")
 
-        for i, (key, label, _cls) in enumerate(PAGE_DEFS):
-            btn = ctk.CTkButton(side, text=label, anchor="w",
+        # 内容区（先建好，给 _populate 用）
+        self._content = ctk.CTkFrame(self.root, fg_color=COLOR_BG, corner_radius=0)
+        self._content.grid(row=0, column=1, sticky="nsew")
+        self._content.grid_rowconfigure(0, weight=1)
+        self._content.grid_columnconfigure(0, weight=1)
+
+        # 底部连接状态
+        self._side_status = StatusDot(side, text="未连接")
+        self._side_status.grid(row=98, column=0, padx=20, pady=(8, 4), sticky="sw")
+
+        # 刷新插件按钮（在状态点上方）
+        self._refresh_btn = ctk.CTkButton(side, text="🔄 刷新插件",
+                                           fg_color="transparent",
+                                           hover_color=COLOR_PANEL_HI,
+                                           text_color=COLOR_MUTED,
+                                           corner_radius=8, height=28,
+                                           font=ctk.CTkFont(size=11),
+                                           command=self._on_refresh_plugins)
+        self._refresh_btn.grid(row=97, column=0, padx=12, pady=(2, 0), sticky="ew")
+
+        self._populate_pages()
+
+    def _populate_pages(self) -> None:
+        """根据 _collect_page_defs 填充侧边栏按钮 + content 页实例。"""
+        # 先清掉旧按钮 + 旧 page
+        for btn in self._buttons.values():
+            try: btn.destroy()
+            except Exception: pass
+        self._buttons.clear()
+        for page in self._pages.values():
+            try:
+                page.grid_forget()
+                page.destroy()
+            except Exception: pass
+        self._pages.clear()
+
+        for i, (key, label, factory) in enumerate(self._collect_page_defs()):
+            btn = ctk.CTkButton(self._sidebar, text=label, anchor="w",
                                   fg_color="transparent",
                                   hover_color=COLOR_PANEL_HI,
                                   text_color=COLOR_TEXT,
@@ -96,19 +146,25 @@ class CompanionApp:
             btn.grid(row=2 + i, column=0, padx=12, pady=4, sticky="ew")
             self._buttons[key] = btn
 
-        # 底部连接状态
-        self._side_status = StatusDot(side, text="未连接")
-        self._side_status.grid(row=98, column=0, padx=20, pady=(8, 20), sticky="sw")
-
-        # 内容区
-        self._content = ctk.CTkFrame(self.root, fg_color=COLOR_BG, corner_radius=0)
-        self._content.grid(row=0, column=1, sticky="nsew")
-        self._content.grid_rowconfigure(0, weight=1)
-        self._content.grid_columnconfigure(0, weight=1)
-
-        for key, _label, cls in PAGE_DEFS:
-            page = cls(self._content, self)
+            try:
+                page = factory(self._content, self)
+            except Exception as e:
+                logger.warning("page %s build failed: %s", key, e)
+                continue
             self._pages[key] = page
+
+    def _on_refresh_plugins(self) -> None:
+        if self._pm is None:
+            return
+        n = self._pm.discover_and_load()
+        # 重新连接生命周期事件（对新插件的 on_connect 现在是 stale 的——
+        # 当前已连接时，新插件错过了 connect。简单处理：让它们至少看到一次 connect）
+        if n > 0:
+            self._populate_pages()
+            current = self._side_status.cget("text") if hasattr(self._side_status, "cget") else ""
+            self.bus.emit("log", ("info", "gui", f"loaded {n} new plugin(s)"))
+        else:
+            self.bus.emit("log", ("info", "gui", "no new plugins found"))
 
     def _show(self, key: str) -> None:
         for k, page in self._pages.items():

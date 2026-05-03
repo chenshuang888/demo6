@@ -32,11 +32,11 @@ from typing import Any, Optional
 
 import customtkinter as ctk
 
-from ..theme import (
+from companion.gui.theme import (
     COLOR_ACCENT, COLOR_ACCENT2, COLOR_BG, COLOR_ERR, COLOR_MUTED,
     COLOR_OK, COLOR_PANEL, COLOR_PANEL_HI, COLOR_TEXT, COLOR_WARN,
 )
-from ..widgets import Card
+from companion.gui.widgets import Card
 
 logger = logging.getLogger(__name__)
 

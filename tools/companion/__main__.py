@@ -12,13 +12,14 @@ import time
 from . import config as cfg
 from .bus import EventBus
 from .core import Companion
-from .providers.bridge_provider import BridgeProvider
-from .providers.media_provider import MediaProvider
-from .providers.notify_provider import NotifyProvider
-from .providers.system_provider import SystemProvider
-from .providers.time_provider import TimeProvider
-from .providers.upload_provider import UploadProvider
-from .providers.weather_provider import WeatherProvider
+from .plugin_manager import PluginManager
+from .providers.dynapp.bridge_provider import BridgeProvider
+from .providers.dynapp.upload_provider import UploadProvider
+from .providers.native.media_provider  import MediaProvider
+from .providers.native.notify_provider import NotifyProvider
+from .providers.native.system_provider import SystemProvider
+from .providers.native.time_provider   import TimeProvider
+from .providers.native.weather_provider import WeatherProvider
 from .runner import AsyncRunner
 
 
@@ -30,12 +31,24 @@ def _setup_logging(level: str) -> None:
     )
 
 
-def _build_companion(bus: EventBus, cfg_data: dict) -> Companion:
+def _build_companion(bus: EventBus, cfg_data: dict) -> tuple[Companion, PluginManager]:
     comp = Companion(
         device_name=cfg_data.get("device_name", "ESP32-S3-DEMO"),
         bus=bus,
         device_address=cfg_data.get("device_address"),
     )
+
+    # PluginManager：bridge 把 BLE 收的消息派给它，插件通过它的 tx_func 反向写 BLE
+    def _tx(to_app: str, mtype: str, body) -> None:
+        bus.emit("bridge:tx", (to_app, mtype, body))
+    pm = PluginManager(bus, tx_func=_tx, is_connected=lambda: comp.is_connected)
+    n = pm.discover_and_load()
+    logging.getLogger("plugin_manager").info("loaded %d plugin(s)", n)
+
+    # 把 connect/disconnect 转给所有插件
+    bus.on("connect",    lambda addr: pm.dispatch_connect(addr))
+    bus.on("disconnect", lambda _:    pm.dispatch_disconnect())
+
     enabled = cfg_data.get("providers", {})
     if enabled.get("time", True):    comp.register(TimeProvider())
     if enabled.get("weather", True): comp.register(WeatherProvider())
@@ -43,13 +56,13 @@ def _build_companion(bus: EventBus, cfg_data: dict) -> Companion:
     if enabled.get("system", True):  comp.register(SystemProvider())
     if enabled.get("media", True):
         comp.register(MediaProvider(music_folder=cfg_data.get("music_folder")))
-    if enabled.get("bridge", True):  comp.register(BridgeProvider())
+    if enabled.get("bridge", True):  comp.register(BridgeProvider(plugin_manager=pm))
     if enabled.get("upload", True):  comp.register(UploadProvider())
-    return comp
+    return comp, pm
 
 
 def _run_no_gui(bus: EventBus, runner: AsyncRunner, cfg_data: dict) -> int:
-    comp = _build_companion(bus, cfg_data)
+    comp, pm = _build_companion(bus, cfg_data)
 
     # 把日志事件打到 stdout
     def _print_log(payload: object) -> None:
@@ -84,6 +97,7 @@ def _run_no_gui(bus: EventBus, runner: AsyncRunner, cfg_data: dict) -> int:
         fut.result(timeout=8.0)
     except Exception:
         pass
+    pm.unload_all()
     runner.stop()
     return 0
 
@@ -96,7 +110,7 @@ def _run_gui(bus: EventBus, runner: AsyncRunner, cfg_data: dict) -> int:
         return 2
     from .tray import Tray
 
-    comp = _build_companion(bus, cfg_data)
+    comp, pm = _build_companion(bus, cfg_data)
     fut = runner.submit(comp.run())
 
     quit_event = {"called": False}
@@ -108,6 +122,10 @@ def _run_gui(bus: EventBus, runner: AsyncRunner, cfg_data: dict) -> int:
         comp.stop()
         try:
             fut.result(timeout=8.0)
+        except Exception:
+            pass
+        try:
+            pm.unload_all()
         except Exception:
             pass
         try:
@@ -123,6 +141,7 @@ def _run_gui(bus: EventBus, runner: AsyncRunner, cfg_data: dict) -> int:
         _quit_all()
 
     app = CompanionApp(bus=bus, runner=runner, cfg_data=cfg_data,
+                        plugin_manager=pm,
                         on_quit_request=_on_quit_req)
     tray = Tray(on_show=lambda: app.root.after(0, app.show_window),
                  on_quit=lambda: app.root.after(0, _quit_all))
