@@ -12,6 +12,7 @@ from ..bus import EventBus
 from ..runner import AsyncRunner
 from .pages.home import HomePage
 from .pages.log import LogPage
+from .pages.marketplace import MarketplacePage
 from .pages.music import MusicPage
 from .pages.notify import NotifyPage
 from .pages.upload import UploadPage
@@ -26,11 +27,12 @@ logger = logging.getLogger(__name__)
 
 
 PAGE_DEFS = [
-    ("home",   "首页",   HomePage),
-    ("music",  "音乐",   MusicPage),
-    ("upload", "上传",   UploadPage),
-    ("notify", "通知",   NotifyPage),
-    ("log",    "日志",   LogPage),
+    ("home",        "首页",   HomePage),
+    ("marketplace", "市场",   MarketplacePage),
+    ("music",       "音乐",   MusicPage),
+    ("upload",      "上传",   UploadPage),
+    ("notify",      "通知",   NotifyPage),
+    ("log",         "日志",   LogPage),
 ]
 
 

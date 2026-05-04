@@ -450,6 +450,12 @@ idf.py -p COM3 erase-flash
 
 ## 版本历史
 
+- **v0.10 (2026-05-04)** — Marketplace 集成：companion 加「市场」侧边栏，浏览 [esp32-marketplace](../esp32-marketplace/) 上的动态 app，**一键安装/卸载/更新**。
+  - 新增 `tools/companion/marketplace/`：HTTP 客户端 + .mpkg 解析 + plugin 装载 + registry
+  - 新增 GUI 页 `tools/companion/gui/pages/marketplace.py`
+  - 安装链路复用现有 `UploadProvider` + `UploaderClient.upload_app_pack`，零修改
+  - 已装清单落 `tools/plugins/.marketplace_meta/_registry.json`
+  - 详见 [docs/Marketplace集成_工作日志.md](docs/Marketplace集成_工作日志.md)
 - **v0.9 (2026-05-03)** — 动态 App 平台化达成「**新增 app 不改任何端的基础设施**」：
   - PC 端三层边界整理：`shared/` → `platform/`，`plugin_sdk` 升级为包加 `platform/gui` 门面
   - 删孤儿插件 `music_proxy`，`tools/scripts/` 收纳构建期工具
